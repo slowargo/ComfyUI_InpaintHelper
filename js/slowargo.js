@@ -113,6 +113,7 @@ app.registerExtension({
                     imageWidget.callback.call(imageWidget);
                 }
 
+                // I borrow the idea from https://github.com/if-ai/ComfyUI_IF_AI_LoadImages/blob/main/web/js/IFLoadImagesNodeS.js
                 // In the refresh button callback
                 const refreshBtn = this.addWidget("button", "refresh_preview", "Refresh Previews 🔄", async () => {
                     try {

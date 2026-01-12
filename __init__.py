@@ -18,111 +18,137 @@ import numpy as np
 from server import PromptServer
 import torch
 import re
+import hashlib
+
 
 logger = logging.getLogger(__name__)
 
-class Example(io.ComfyNode):
+# 工具函数：处理图像并转换为 PyTorch 张量
+def process_image_to_tensor(image_path):
     """
-    An example node
-
-    Class methods
-    -------------
-    define_schema (io.Schema):
-        Tell the main program the metadata, input, output parameters of nodes.
-    fingerprint_inputs:
-        optional method to control when the node is re executed.
-    check_lazy_status:
-        optional method to control list of input names that need to be evaluated.
-
+    通用的图像处理函数，将图像文件转换为PyTorch张量
+    这个函数封装了原来在多个 load_image 方法中重复的图像处理逻辑
     """
+    img = node_helpers.pillow(Image.open, image_path)
 
-    @classmethod
-    def define_schema(cls) -> io.Schema:
-        """
-            Return a schema which contains all information about the node.
-            Some types: "Model", "Vae", "Clip", "Conditioning", "Latent", "Image", "Int", "String", "Float", "Combo".
-            For outputs the "io.Model.Output" should be used, for inputs the "io.Model.Input" can be used.
-            The type can be a "Combo" - this will be a list for selection.
-        """
-        return io.Schema(
-            node_id="Example",
-            display_name="Example Node",
-            category="Slowargo",
-            inputs=[
-                io.Image.Input("image"),
-                io.Int.Input(
-                    "int_field",
-                    min=0,
-                    max=4096,
-                    step=64, # Slider's step
-                    display_mode=io.NumberDisplay.number,  # Cosmetic only: display as "number" or "slider"
-                    lazy=True,  # Will only be evaluated if check_lazy_status requires it
-                ),
-                io.Float.Input(
-                    "float_field",
-                    default=1.0,
-                    min=0.0,
-                    max=10.0,
-                    step=0.01,
-                    round=0.001, #The value representing the precision to round to, will be set to the step value by default. Can be set to False to disable rounding.
-                    display_mode=io.NumberDisplay.number,
-                    lazy=True,
-                ),
-                io.Combo.Input("print_to_screen", options=["enable", "disable"]),
-                io.String.Input(
-                    "string_field",
-                    multiline=False,  # True if you want the field to look like the one on the ClipTextEncode node
-                    default="Hello world!",
-                    lazy=True,
-                ),
-            ],
-            outputs=[
-                io.Image.Output(),
-            ],
+    output_images = []
+    output_masks = []
+    w, h = None, None
+
+    excluded_formats = ['MPO']
+
+    for i in ImageSequence.Iterator(img):
+        i = node_helpers.pillow(ImageOps.exif_transpose, i)
+
+        if i.mode == 'I':
+            i = i.point(lambda i: i * (1 / 255))
+        image = i.convert("RGB")
+
+        if len(output_images) == 0:
+            w = image.size[0]
+            h = image.size[1]
+
+        if image.size[0] != w or image.size[1] != h:
+            continue
+
+        image = np.array(image).astype(np.float32) / 255.0
+        image = torch.from_numpy(image)[None,]
+        if 'A' in i.getbands():
+            mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
+            mask = 1. - torch.from_numpy(mask)
+        elif i.mode == 'P' and 'transparency' in i.info:
+            mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
+            mask = 1. - torch.from_numpy(mask)
+        else:
+            mask = torch.zeros((64,64), dtype=torch.float32, device="cpu")
+        output_images.append(image)
+        output_masks.append(mask.unsqueeze(0))
+
+    if len(output_images) > 1 and img.format not in excluded_formats:
+        output_image = torch.cat(output_images, dim=0)
+        output_mask = torch.cat(output_masks, dim=0)
+    else:
+        output_image = output_images[0]
+        output_mask = output_masks[0]
+
+    meta_data = ""
+    if img.format == 'PNG':
+        meta_data = img.info
+
+    return output_image, output_mask, meta_data
+
+def get_recent_image_files(
+    directories: List[Tuple[str, str, int]],   # (sub_folder相对路径, label标记, 最大数量)
+    base_root_getter=None,
+    valid_exts: set = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+) -> List[str]:
+    """
+    从多个 (子目录 + 标记) 配置中，获取最新的图片文件显示名称列表
+    所有文件按修改时间全局降序排序
+    
+    directories 中的每一项：
+    - sub_folder: 相对于 base 的子路径（如 ""、"my/sub"）
+    - label:      标记类型（如 "output"、"input" 或 ""）
+                 - 如果 label 非空，会添加 [label] 到显示名
+                 - 如果 label 为空，则不加标签
+    """
+    if base_root_getter is None:
+        def base_root_getter(label: str) -> Path:
+            if label == "input":
+                return Path(folder_paths.get_input_directory())
+            else:
+                # 默认当作 output 处理
+                return Path(folder_paths.get_output_directory())
+
+    file_items: List[Tuple[Path, str]] = []  # (绝对路径, 显示名称)
+
+    def is_valid_image(entry: os.DirEntry) -> bool:
+        return (
+            entry.is_file()
+            and not entry.name.startswith('.')
+            and Path(entry.name).suffix.lower() in valid_exts
         )
 
-    @classmethod
-    def check_lazy_status(cls, image, string_field, int_field, float_field, print_to_screen):
-        """
-            Return a list of input names that need to be evaluated.
+    for sub_folder, label, max_count in directories:
+        # 确定实际根目录
+        root_dir = base_root_getter(label)
+        full_dir = root_dir / sub_folder if sub_folder else root_dir
 
-            This function will be called if there are any lazy inputs which have not yet been
-            evaluated. As long as you return at least one field which has not yet been evaluated
-            (and more exist), this function will be called again once the value of the requested
-            field is available.
+        if not full_dir.is_dir():
+            logger.warning(f"Invalid dir: {full_dir}")
+            continue
 
-            Any evaluated inputs will be passed as arguments to this function. Any unevaluated
-            inputs will have the value None.
-        """
-        if print_to_screen == "enable":
-            return ["int_field", "float_field", "string_field"]
-        else:
-            return []
+        recent_files = []
+        for entry in os.scandir(full_dir):
+            if is_valid_image(entry):
+                recent_files.append(Path(entry))
 
-    @classmethod
-    def execute(cls, image, string_field, int_field, float_field, print_to_screen) -> io.NodeOutput:
-        if print_to_screen == "enable":
-            logger.info(f"""Your input contains:
-                string_field aka input text: {string_field}
-                int_field: {int_field}
-                float_field: {float_field}
-            """)
-        #do some processing on the image, in this example I just invert it
-        image = 1.0 - image
-        return io.NodeOutput(image)
+        recent_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        recent_files = recent_files[:max_count]
 
-    """
-        The node will always be re executed if any of the inputs change but
-        this method can be used to force the node to execute again even when the inputs don't change.
-        You can make this node return a number or a string. This value will be compared to the one returned the last time the node was
-        executed, if it is different the node will be executed again.
-        This method is used in the core repo for the LoadImage node where they return the image hash as a string, if the image hash
-        changes between executions the LoadImage node is executed again.
-    """
-    #@classmethod
-    #def fingerprint_inputs(s, image, string_field, int_field, float_field, print_to_screen):
-    #    return ""
+        for path in recent_files:
+            # 相对于 full_dir 的相对路径
+            rel_path = path.relative_to(full_dir).as_posix()
 
+            # 构建显示名称
+            if sub_folder:
+                display_base = f"{sub_folder}/{rel_path}"
+            else:
+                display_base = rel_path
+
+            if label:
+                display_name = f"{display_base} [{label}]"
+            else:
+                display_name = display_base
+
+            file_items.append((path, display_name))
+
+    # 全局按修改时间重新排序
+    file_items.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+
+    return [display_name for _, display_name in file_items]
+#######################################################################################################################
+# V1 style nodes
 
 class FloatSwitchV3(io.ComfyNode):
     """
@@ -201,7 +227,6 @@ class FloatSwitchV3(io.ComfyNode):
         PromptServer.instance.send_sync("slowargo.js.extension.FloatSwitch", {"selected_value": selected_value})
         return io.NodeOutput(selected_value)
 
-
 class LoadImageFromOutputsPlus(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -245,25 +270,9 @@ class LoadImageFromOutputsPlus(io.ComfyNode):
 
     @staticmethod
     def get_file_names(sub_folder="") -> List[str]:
-        directory = folder_paths.get_output_directory()
-        VALID_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-
-        # 安全拼接 sub_folder
-        directory = os.path.join(directory, sub_folder)
-
-        def is_valid_image(filename: str) -> bool:
-            # logger.info(f"[is_valid_image]: files: {filename}")
-            return any(filename.lower().endswith(ext) for ext in VALID_EXTS)
-
-        def is_visible_file(entry: os.DirEntry) -> bool:
-            """Filter out hidden files (e.g., .DS_Store on macOS)."""
-            return entry.is_file() and not entry.name.startswith('.') and is_valid_image(entry.name)
-
-        files = [entry for entry in os.scandir(directory) if is_visible_file(entry)]
-        sorted_files = sorted(files, key=lambda x: os.path.getmtime(os.path.join(directory, x)), reverse=True)
-        file_names = [entry.name for entry in sorted_files]
-        # logger.info(f"[get_file_names]: files:{directory} -> {file_names}")
-        return file_names
+        return get_recent_image_files([
+            (sub_folder, "", 9999),  # 無標籤，數量幾乎不限
+        ])
 
     @staticmethod
     def get_image_metadata(image_path):
@@ -292,33 +301,6 @@ class LoadImageFromOutputsPlus(io.ComfyNode):
 
     @classmethod
     def execute(cls, image: str, image_folder: str ) -> io.NodeOutput:
-        # directory = folder_paths.get_output_directory()
-        # directory = os.path.join(directory, image_folder)
-        # image_path = os.path.join(directory, image)
-        # try:
-        #     with Image.open(image_path) as img:
-        #         w, h = img.size
-        #         c = len(img.getbands())
-        #         normalized = np.array(img).astype(np.float32) / 255.0
-        #         tensor = torch.from_numpy(normalized).reshape(1, h, w, c)
-        #         match c:
-        #             case 1:
-        #                 oimage = tensor.expand(1, h, w, 3)
-        #                 mask = tensor.reshape(1, h, w)
-        #             case 3:
-        #                 oimage = tensor
-        #                 mask = tensor[..., 0]
-        #             case 4:
-        #                 oimage = tensor[..., :3]
-        #                 mask = tensor[..., 3]
-        #         # read meta data
-        #         meta_data = cls.get_image_metadata(image_path)
-        #         logger.info(f"meta_data: {meta_data}")
-        #         return io.NodeOutput(oimage, mask,image, meta_data)
-        # except Exception as e:
-        #     logger.error(f"Error: {e}")
-        #     return None
-
         try:
             def_dir = folder_paths.get_output_directory()
             def_dir = os.path.join(def_dir, image_folder)
@@ -327,54 +309,16 @@ class LoadImageFromOutputsPlus(io.ComfyNode):
             image_path = folder_paths.get_annotated_filepath(image, def_dir)
             logger.info(f"[LoadImageFromOutputsPlus] image:{image} image_folder:{image_folder} def_dir: {def_dir} -> {image_path}")
 
-            img = node_helpers.pillow(Image.open, image_path)
-
-            output_images = []
-            output_masks = []
-            w, h = None, None
-
-            excluded_formats = ['MPO']
-
-            for i in ImageSequence.Iterator(img):
-                i = node_helpers.pillow(ImageOps.exif_transpose, i)
-
-                if i.mode == 'I':
-                    i = i.point(lambda i: i * (1 / 255))
-                image = i.convert("RGB")
-
-                if len(output_images) == 0:
-                    w = image.size[0]
-                    h = image.size[1]
-
-                if image.size[0] != w or image.size[1] != h:
-                    continue
-
-                image = np.array(image).astype(np.float32) / 255.0
-                image = torch.from_numpy(image)[None,]
-                if 'A' in i.getbands():
-                    mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
-                    mask = 1. - torch.from_numpy(mask)
-                elif i.mode == 'P' and 'transparency' in i.info:
-                    mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
-                    mask = 1. - torch.from_numpy(mask)
-                else:
-                    mask = torch.zeros((64,64), dtype=torch.float32, device="cpu")
-                output_images.append(image)
-                output_masks.append(mask.unsqueeze(0))
-
-            if len(output_images) > 1 and img.format not in excluded_formats:
-                output_image = torch.cat(output_images, dim=0)
-                output_mask = torch.cat(output_masks, dim=0)
-            else:
-                output_image = output_images[0]
-                output_mask = output_masks[0]
-
+            output_image, output_mask, _ = process_image_to_tensor(image_path)
+        
             return (output_image, output_mask)
+
         except Exception as e:
             logger.error(f"Error: {e}")
             return None
 
 #######################################################################################################################
+# V1 style nodes
 class FloatSwitch:
     """
     浮点数切换器
@@ -471,7 +415,7 @@ class LoadImageFromOutputPlusV1(nodes.LoadImage):
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING")
     RETURN_NAMES = ("IMAGE", "MASK", "File Name", "Meta Data")
-    DESCRIPTION = "Load an image from the output folder. When the refresh button is clicked, the node will update the image list and automatically select the first image, allowing for easy iteration."
+    DESCRIPTION = "Load an image from the output folder. When the refresh button is clicked, the node will update the image list (takes 10 from output folder and 3 from clipspace folder) and automatically select the first image, allowing for easy iteration."
     EXPERIMENTAL = True
     FUNCTION = "load_image"
     CATEGORY = "Slowargo"
@@ -482,126 +426,21 @@ class LoadImageFromOutputPlusV1(nodes.LoadImage):
         # 构造图像路径
         image_path = folder_paths.get_annotated_filepath(image, output_dir)
 
-        file_name = image_path
-        meta_data = ""
+        # logger.info(f"[LoadImageFromOutputPlusV1] image:{image} sub_folder:{sub_folder} -> {image_path}")
 
-        # if image.endswith("[output]"):
-        #     # try sub_folder
+        # 使用优化后的工具函数处理图像
+        output_image, output_mask, meta_data = process_image_to_tensor(image_path)
+        
+        file_name = os.path.basename(image_path)
 
-        logger.info(f"[LoadImageFromOutputPlusV1] image:{image} sub_folder:{sub_folder} -> {image_path}")
-
-        img = node_helpers.pillow(Image.open, image_path)
-
-        output_images = []
-        output_masks = []
-        w, h = None, None
-
-        excluded_formats = ['MPO']
-
-        for i in ImageSequence.Iterator(img):
-            i = node_helpers.pillow(ImageOps.exif_transpose, i)
-
-            if i.mode == 'I':
-                i = i.point(lambda i: i * (1 / 255))
-            image = i.convert("RGB")
-
-            if len(output_images) == 0:
-                w = image.size[0]
-                h = image.size[1]
-
-            if image.size[0] != w or image.size[1] != h:
-                continue
-
-            image = np.array(image).astype(np.float32) / 255.0
-            image = torch.from_numpy(image)[None,]
-            if 'A' in i.getbands():
-                mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
-                mask = 1. - torch.from_numpy(mask)
-            elif i.mode == 'P' and 'transparency' in i.info:
-                mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
-                mask = 1. - torch.from_numpy(mask)
-            else:
-                mask = torch.zeros((64,64), dtype=torch.float32, device="cpu")
-            output_images.append(image)
-            output_masks.append(mask.unsqueeze(0))
-
-        if len(output_images) > 1 and img.format not in excluded_formats:
-            output_image = torch.cat(output_images, dim=0)
-            output_mask = torch.cat(output_masks, dim=0)
-        else:
-            output_image = output_images[0]
-            output_mask = output_masks[0]
-
-        # logger.info(f"[LoadImageFromOutputPlusV1] img:{img}")
-        if img.format == 'PNG':
-            meta_data = img.info
-
-        return (output_image, output_mask, os.path.basename(file_name), meta_data)
+        return (output_image, output_mask, file_name, meta_data)
 
     @staticmethod
     def get_file_names(sub_folder="") -> List[str]:
-        VALID_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-        """
-        获取 output 目录 + clipspace 目录中最新的圖片文件名（按修改時間排序）
-        - output 目录下最多取 10 張
-        - clipspace 目录下最多取 3 張，並標記為 [input]
-        """
-        output_dir = Path(folder_paths.get_output_directory()) / sub_folder
-        clipspace_dir = Path(folder_paths.get_input_directory()) / "clipspace"
-
-        def is_valid_image_file(entry: os.DirEntry) -> bool:
-            """判斷是否為可見的圖片文件"""
-            return (
-                    entry.is_file()
-                    and not entry.name.startswith(".")
-                    and Path(entry.name).suffix.lower() in VALID_IMAGE_EXTS
-            )
-
-        def get_recent_files(directory: Path, max_count: int) -> List[Path]:
-            """獲取目錄下最新的 max_count 個圖片文件"""
-            if not directory.is_dir():
-                return []
-
-            files = [
-                entry.path
-                for entry in os.scandir(directory)
-                if is_valid_image_file(entry)
-            ]
-            # 按修改時間降序排序
-            sorted_paths = sorted(
-                (Path(p) for p in files),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True
-            )
-            return sorted_paths[:max_count]
-
-        # 獲取兩組文件
-        output_files = get_recent_files(output_dir, 10)
-        clipspace_files = get_recent_files(clipspace_dir, 3)
-
-        # 建立 (路徑, 顯示名稱) 的對應關係
-        file_items = []
-
-        # output 目錄的文件
-        for path in output_files:
-            rel_path = path.relative_to(output_dir).as_posix()
-            file_items.append((path, rel_path))
-
-        # clipspace 目錄的文件 + 標記
-        # 前端会自动识别处理 annotation (see createAnnotatedPath)
-        for path in clipspace_files:
-            rel_path = path.relative_to(clipspace_dir).as_posix()
-            display_name = f"clipspace/{rel_path} [input]"
-            file_items.append((path, display_name))
-
-        # 按修改時間重新整體排序（最重要的步驟）
-        file_items.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
-
-        # 只取最終顯示名稱
-        final_names = [display_name for _, display_name in file_items]
-
-        # logger.info(f"[get_file_names] {output_dir} + clipspace → {final_names}")
-        return final_names
+        return get_recent_image_files([
+            (sub_folder, "", 10),       # output 目录 + sub_folder 前缀，不强制加 [output]
+            ("clipspace","input", 3),   # clipspace 固定子目录，加 [input]
+        ])
 
 class LoadRecentImagePlusV1(nodes.LoadImage):
     @classmethod
@@ -638,150 +477,41 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
         # 构造图像路径
         image_path = folder_paths.get_annotated_filepath(image)
 
-        file_name = image_path
-        meta_data = ""
-
-        # if image.endswith("[output]"):
-        #     # try sub_folder
-
         # logger.info(f"[LoadImageFromOutputPlusV1] image:{image} -> {image_path}")
 
-        img = node_helpers.pillow(Image.open, image_path)
+        # 使用优化后的工具函数处理图像
+        output_image, output_mask, meta_data = process_image_to_tensor(image_path)
+       
+        file_name = os.path.basename(image_path)
 
-        output_images = []
-        output_masks = []
-        w, h = None, None
-
-        excluded_formats = ['MPO']
-
-        for i in ImageSequence.Iterator(img):
-            i = node_helpers.pillow(ImageOps.exif_transpose, i)
-
-            if i.mode == 'I':
-                i = i.point(lambda i: i * (1 / 255))
-            image = i.convert("RGB")
-
-            if len(output_images) == 0:
-                w = image.size[0]
-                h = image.size[1]
-
-            if image.size[0] != w or image.size[1] != h:
-                continue
-
-            image = np.array(image).astype(np.float32) / 255.0
-            image = torch.from_numpy(image)[None,]
-            if 'A' in i.getbands():
-                mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
-                mask = 1. - torch.from_numpy(mask)
-            elif i.mode == 'P' and 'transparency' in i.info:
-                mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
-                mask = 1. - torch.from_numpy(mask)
-            else:
-                mask = torch.zeros((64,64), dtype=torch.float32, device="cpu")
-            output_images.append(image)
-            output_masks.append(mask.unsqueeze(0))
-
-        if len(output_images) > 1 and img.format not in excluded_formats:
-            output_image = torch.cat(output_images, dim=0)
-            output_mask = torch.cat(output_masks, dim=0)
-        else:
-            output_image = output_images[0]
-            output_mask = output_masks[0]
-
-        # logger.info(f"[LoadImageFromOutputPlusV1] img:{img}")
-        if img.format == 'PNG':
-            meta_data = img.info
-
-        return (output_image, output_mask, os.path.basename(file_name), meta_data)
+        return (output_image, output_mask, file_name, meta_data)
 
     @staticmethod
     def get_file_names(watch_folders="") -> List[str]:
-        VALID_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-        """
-        获取 output 目录 + clipspace 目录中最新的圖片文件名（按修改時間排序）
-        - output 目录下最多取 10 張
-        - clipspace 目录下最多取 3 張，並標記為 [input]
-        """
-        # 初始化文件列表
-        file_items = []
-        
-        def is_valid_image_file(entry: os.DirEntry) -> bool:
-            """判斷是否為可見的圖片文件"""
-            return (
-                entry.is_file()
-                and not entry.name.startswith(".")
-                and Path(entry.name).suffix.lower() in VALID_IMAGE_EXTS
-            )
+        default_watch = "[5][input]"
+        watch_folders = watch_folders.strip() or default_watch
 
-        def get_recent_files(directory: Path, max_count: int) -> List[Path]:
-            """獲取目錄下最新的 max_count 個圖片文件"""
-            if not directory.is_dir():
-                return []
-                
-            files = [
-                entry.path
-                for entry in os.scandir(directory)
-                if is_valid_image_file(entry)
-            ]
-            # 按修改時間降序排序
-            sorted_paths = sorted(
-                (Path(p) for p in files),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True
-            )
-            return sorted_paths[:max_count]
+        directories = []
 
-        # parse watch_folders
-        watch_folders = watch_folders.strip()
-        if not watch_folders:
-            watch_folders = "[5][input]"
-            logger.info(f"[LoadRecentImagePlusV1] use default watch_folders: {watch_folders}")
-
-        folder_items = watch_folders.split(";")
-        # 解析每个文件夹项
-        for item in folder_items:
+        for item in watch_folders.split(";"):
             item = item.strip()
             if not item:
                 continue
-                
-            try:
-                # 正则提取 sub_folder, 数量和类型 - 支持空sub_folder
-                match = re.match(r"^(.*?)\s*\[(\d+)\]\[(.*?)\]$", item)
-                if not match:
-                    logger.warning(f"[LoadRecentImagePlusV1] 无效的文件夹配置项: {item}")
-                    continue
-                
-                sub_folder, count_str, folder_type = match.groups()
-                sub_folder = sub_folder.strip()
-                count = int(count_str)
-                
-                # 根据类型设置目录
-                if folder_type == "output":
-                    directory = Path(folder_paths.get_output_directory()) / sub_folder
-                elif folder_type == "input":
-                    directory = Path(folder_paths.get_input_directory()) / sub_folder
-                else:
-                    logger.warning(f"[LoadRecentImagePlusV1] 未知目录类型: {folder_type}")
-                    continue
-                    
-                # 获取最新文件
-                recent_files = get_recent_files(directory, count)
-                for path in recent_files:
-                    rel_path = path.relative_to(directory).as_posix()
-                    display_name = f"{sub_folder}/{rel_path} [{folder_type}]" if sub_folder else f"{rel_path} [{folder_type}]"
-                    file_items.append((path, display_name))
-                    
-            except (ValueError, AttributeError) as e:
-                logger.warning(f"[LoadRecentImagePlusV1] 解析文件夹配置项失败: {item}, 错误: {str(e)}")
+
+            match = re.match(r"^(.*?)\s*\[(\d+)\]\[(.*?)\]$", item)
+            if not match:
+                logger.warning(f"[LoadRecentImagePlusV1] Invalid watch folder item: {item}")
                 continue
 
-        # 按修改時間重新整體排序（最重要的步驟）
-        file_items.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+            sub_folder, count_str, folder_type = match.groups()
+            sub_folder = sub_folder.strip()
+            count = int(count_str)
 
-        # 只取最終顯示名稱
-        final_names = [display_name for _, display_name in file_items]
+            folder_type = folder_type.lower()
 
-        return final_names
+            directories.append((sub_folder, folder_type, count))
+
+        return get_recent_image_files(directories)
 
 class LoadImageFromAnyPath:
     @classmethod
@@ -799,60 +529,17 @@ class LoadImageFromAnyPath:
     CATEGORY = "Slowargo"
 
     def load_image(self, image_path):
-        logger.info(f"[LoadImageFromAnyPath] -----> image:{image_path}")
-        # image_path = image
-        meta_data = ""
+        # logger.info(f"[LoadImageFromAnyPath] image:{image_path}")
 
-        img = node_helpers.pillow(Image.open, image_path)
-
-        output_images = []
-        output_masks = []
-        w, h = None, None
-
-        excluded_formats = ['MPO']
-
-        for i in ImageSequence.Iterator(img):
-            i = node_helpers.pillow(ImageOps.exif_transpose, i)
-
-            if i.mode == 'I':
-                i = i.point(lambda i: i * (1 / 255))
-            image = i.convert("RGB")
-
-            if len(output_images) == 0:
-                w = image.size[0]
-                h = image.size[1]
-
-            if image.size[0] != w or image.size[1] != h:
-                continue
-
-            image = np.array(image).astype(np.float32) / 255.0
-            image = torch.from_numpy(image)[None,]
-            if 'A' in i.getbands():
-                mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
-                mask = 1. - torch.from_numpy(mask)
-            elif i.mode == 'P' and 'transparency' in i.info:
-                mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
-                mask = 1. - torch.from_numpy(mask)
-            else:
-                mask = torch.zeros((64,64), dtype=torch.float32, device="cpu")
-            output_images.append(image)
-            output_masks.append(mask.unsqueeze(0))
-
-        if len(output_images) > 1 and img.format not in excluded_formats:
-            output_image = torch.cat(output_images, dim=0)
-            output_mask = torch.cat(output_masks, dim=0)
-        else:
-            output_image = output_images[0]
-            output_mask = output_masks[0]
-
-        # logger.info(f"[LoadImageFromOutputPlusV1] img:{img}")
-        if img.format == 'PNG':
-            meta_data = img.info
+        output_image, output_mask, meta_data = process_image_to_tensor(image_path)
 
         return (output_image, output_mask, image_path, meta_data)
 
     @classmethod
     def IS_CHANGED(s, image_path):
+        if image_path is None or not os.path.exists(image_path):
+            # logger.info(f"[LoadImageFromAnyPath] IS_CHANGED image_path:{image_path}")
+            return ""
         m = hashlib.sha256()
         with open(image_path, 'rb') as f:
             m.update(f.read())
@@ -867,6 +554,7 @@ class SaveImageToFileName(nodes.SaveImage):
                 "filename": ("STRING", {"default": "ComfyUI_output", "tooltip": "Output file name. If no suffix, default to .png. Parent paths will be ignored."}),
                 "sub_folder": ("STRING", {"default": ""}),
                 "meta_data": ("STRING", {"default": ""}),
+                "force_format": ("COMBO", {"options": ["PNG", "JPEG", "WEBP","auto"], "default": "auto"}),
             },
             "hidden": {
                 "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
@@ -876,8 +564,9 @@ class SaveImageToFileName(nodes.SaveImage):
     FUNCTION = "save_image"
     CATEGORY = "Slowargo"
 
-    def save_image(self, image, filename="ComfyUI_output", sub_folder="", meta_data=None,prompt=None, extra_pnginfo=None):
+    def save_image(self, image, filename="ComfyUI_output", sub_folder="", meta_data=None, force_format="auto", prompt=None, extra_pnginfo=None):
         """
+        Save / Overwrite image with filename.
         保存圖像，支持：
         - 根據 filename 後綴自動選擇格式（.png / .jpg / .jpeg / .webp 等）
         - 優先使用傳入的 meta_data（字符串 JSON 格式，包含原始 PNG 元數據）
@@ -885,32 +574,52 @@ class SaveImageToFileName(nodes.SaveImage):
         - PNG 格式完整保留元數據（文本 + ICC Profile）
         - 其他格式（如 JPG/WEBP）不寫元數據（因為不支援或不推薦）
         """
-        full_output_folder = Path(folder_paths.get_output_directory()) / sub_folder
-        full_output_folder.mkdir(parents=True, exist_ok=True)
-
         results = []
         img = None
+        # 只處理第一張圖像
         for (batch_number, image) in enumerate(image):
             # 轉換為 Pillow Image
             i = 255. * image.cpu().numpy()
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
             break
 
+        # 準備保存目錄  
+        full_output_folder = Path(folder_paths.get_output_directory()) / sub_folder
+        full_output_folder.mkdir(parents=True, exist_ok=True)
+
         filename = os.path.basename(filename)
+        full_file_path = full_output_folder / filename
 
         # 解析文件名與格式
         file_path = Path(filename)
         suffix = file_path.suffix.lower()  # 如 ".png", ".jpg"
-        stem = file_path.stem              # 無後綴名
+        stem = file_path.stem              # 主文件名
+
+        file_format = "PNG"
+        if force_format != "auto":
+            # 強制指定格式, 但保存時還是使用原文件名
+            file_format = force_format.upper()
+        elif suffix:
+            # Auto detect file type
+            if suffix in (".png", ".jpg", ".jpeg", ".webp"):
+                file_format = suffix[1:].upper()  # 如 "PNG", "JPEG"
+            else:
+                logger.warning(f"[SaveImageToFileName] unknown suffix: {suffix}, default to PNG")
+
+        if not suffix:
+            suffix = f".{file_format.lower()}"
+            full_file_path = full_output_folder / f"{stem}{suffix}"
 
         # 默認 PNG（如果無後綴）
-        if not suffix:
-            suffix = ".png"
-            file_name = f"{stem}.png"
-        else:
-            file_name = filename
-
-        full_file_path = full_output_folder / file_name
+        # if not suffix:
+        #     if force_format != "auto":
+        #         suffix = f".{force_format.lower()}"
+        #     else:
+        #         # default to PNG
+        #         suffix = ".png"
+        #     file_name = f"{stem}{suffix}"
+        # else:
+        #     file_name = filename
 
         # 準備保存參數
         save_kwargs = {
@@ -918,13 +627,16 @@ class SaveImageToFileName(nodes.SaveImage):
             # "optimize": True
         }
 
+        # if force_format != "auto":
+        #     save_kwargs["format"] = force_format.upper()
+
         pnginfo = None
         icc_profile = None
 
         # 優先級 1：用戶傳入的 meta_data（字符串 JSON）
         if meta_data:
             try:
-                if suffix == ".png":
+                if file_format == "PNG":
                     pnginfo = PngInfo()
 
                     if isinstance(meta_data, str):
@@ -950,7 +662,7 @@ class SaveImageToFileName(nodes.SaveImage):
                 logger.warning(f"[SaveImageToFileName] failed to parse custom meta_data : {e}")
 
         # 優先級 2：ComfyUI 標準元數據（僅在 PNG 且未被覆蓋時添加）
-        if not args.disable_metadata and suffix == ".png" and pnginfo is None:
+        if not args.disable_metadata and file_format == "PNG" and pnginfo is None:
             pnginfo = PngInfo()
 
             # 添加 prompt
@@ -963,29 +675,29 @@ class SaveImageToFileName(nodes.SaveImage):
                     pnginfo.add_text(key, json.dumps(extra_pnginfo[key]))
 
         # 只有 PNG 才傳 pnginfo 和 icc_profile
-        if suffix == ".png":
+        if file_format == "PNG":
             if pnginfo:
                 save_kwargs["pnginfo"] = pnginfo
             if icc_profile:
                 save_kwargs["icc_profile"] = icc_profile
             save_kwargs["format"] = "PNG"
-        elif suffix in {".jpg", ".jpeg"}:
+        elif file_format == "JPEG":
             save_kwargs["format"] = "JPEG"
             save_kwargs["quality"] = 95      # 高品質 JPEG
             save_kwargs["optimize"] = True
-        elif suffix == ".webp":
+        elif file_format == "WEBP":
             save_kwargs["format"] = "WEBP"
             save_kwargs["quality"] = 95
             save_kwargs["method"] = 6         # 最高壓縮質量
-        else:
-            # 不支援的格式，強制轉 PNG
-            logger.warning(f"[SaveImageToFileName] Unknown format {suffix}，強制保存為 PNG")
-            full_file_path = full_output_folder / f"{stem}.png"
-            save_kwargs["format"] = "PNG"
-            if pnginfo:
-                save_kwargs["pnginfo"] = pnginfo
-            if icc_profile:
-                save_kwargs["icc_profile"] = icc_profile
+        # should not reach here!
+        # else:
+        #     # 不支援的格式，強制轉 PNG
+        #     logger.warning(f"[SaveImageToFileName] Unknown format {file_format}，強制保存為 PNG")
+        #     save_kwargs["format"] = "PNG"
+        #     if pnginfo:
+        #         save_kwargs["pnginfo"] = pnginfo
+        #     if icc_profile:
+        #         save_kwargs["icc_profile"] = icc_profile
 
         # 執行保存
         img.save(full_file_path, **save_kwargs)
@@ -997,7 +709,7 @@ class SaveImageToFileName(nodes.SaveImage):
             "type": "output"  # 或 self.type，根據你的節點類型調整
         })
 
-        logger.info(f"[SaveImageToFileName] full_output_folder:{full_output_folder} full_file_path:{full_file_path}")
+        logger.info(f"[SaveImageToFileName] full_output_folder:{full_output_folder} full_file_path:{full_file_path} args:{save_kwargs}")
 
         return {"ui": {"images": results}}
 
@@ -1043,7 +755,7 @@ class ExtractSubFolder:
         
         # 获取所有父目录部分（不含文件名）
         parts = list(p.parent.parts)  # 例如 ['', 'foo', 'bar', 'baz']
-        logger.info(f"[ExtractSubFolder] parts:{parts}")
+        # logger.info(f"[ExtractSubFolder] parts:{parts}")
         
         # 如果层级不够，返回能取到的全部（或根据需求返回空）
         if len(parts) <= 1:  # 只有根目录或空
@@ -1156,49 +868,10 @@ async def refresh_previews(request):
         # load_limit = int(data.get("load_limit", "1000"))
         # start_index = int(data.get("start_index", 0))
         # stop_index = int(data.get("stop_index", 10))
-        include_subfolders = data.get("include_subfolders", False)
-        filter_type = data.get("filter_type", "none")
-        sort_method = data.get("sort_method", "date_modified")
+        # include_subfolders = data.get("include_subfolders", False)
+        # filter_type = data.get("filter_type", "none")
+        # sort_method = data.get("sort_method", "date_modified")
         success = True
-
-        # # Get files
-        # if not os.path.isabs(data["input_path"]):
-        #     abs_path = os.path.abspath(os.path.join(folder_paths.get_output_directory(), data["input_path"]))
-        # else:
-        #     abs_path = data["input_path"]
-        #
-        # # Get all files and sort them
-        # all_files = ImageManager.get_image_files(abs_path, include_subfolders, filter_type)
-        # if not all_files:
-        #     return web.json_response({
-        #         "success": False,
-        #         "error": "No valid images found"
-        #     })
-        #
-        # all_files = sorted(all_files,
-        #                    key=numerical_sort_key if sort_method == "numerical"
-        #                    else os.path.getctime if sort_method == "date_created"
-        #                    else os.path.getmtime if sort_method == "date_modified"
-        #                    else str)
-
-        # total_available = len(all_files)
-        #
-        # # Validate and adjust indices
-        # start_index = min(max(0, start_index), total_available)
-        # stop_index = min(max(start_index + 1, stop_index), total_available)
-        #
-        # # Calculate how many images to actually load
-        # num_images = min(stop_index - start_index, load_limit)
-        #
-        # # Create thumbnails only for the selected range
-        # success, message, thumbnails, image_order = ImageManager.create_thumbnails(
-        #     data["input_path"],
-        #     include_subfolders=include_subfolders,
-        #     filter_type=filter_type,
-        #     sort_method=sort_method,
-        #     start_index=start_index,
-        #     max_images=num_images  # Only create thumbnails for the range we want
-        # )
 
         # use get_file_names to get the lates file names
         file_names = LoadImageFromOutputsPlus.get_file_names(data["input_path"])
@@ -1243,6 +916,7 @@ async def refresh_previews_recent(request):
         # logger.info(f"[refresh_previews_recent] request: {request}")
         data = await request.json()
         # logger.info(f"[refresh_previews_recent] data: {data}")
+
         # use get_file_names to get the lates file names
         file_names = LoadRecentImagePlusV1.get_file_names(data["watch_folders"])
 
@@ -1262,7 +936,6 @@ async def refresh_previews_recent(request):
 #     @override
 #     async def get_node_list(self) -> list[type[io.ComfyNode]]:
 #         return [
-#             # Example,
 #             FloatSwitch,
 #             LoadImageFromOutputsPlus,
 #         ]
@@ -1282,9 +955,9 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FloatSwitch": "Float Switch",
-    "LoadImageFromOutputPlusV1": "Load Image (from Outputs) Plus V1",
+    "LoadImageFromOutputPlusV1": "Load Image (from Outputs) Plus V1 (deprecated)",
     "LoadImageFromAnyPath": "Load Image (from Any Path)",
-    "LoadRecentImagePlusV1": "Load Recent Image Plus V1",
+    "LoadRecentImagePlusV1": "Load Recent Image",
     "SaveImageToFileName": "Save Image to Specified File Name",
     "ExtractSubFolder": "Extract Sub Folder",
 }
