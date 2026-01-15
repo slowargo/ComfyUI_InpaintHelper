@@ -7,7 +7,16 @@ import { api } from "../../scripts/api.js";
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
-        // console.log("Hi from slowargo.js!")
+        // console.log("Hi from slowargo.js!");
+        if (ComfyApp.maskeditor_is_opended == null || ComfyApp.maskeditor_is_opended == undefined) {
+            // monkey patch ComfyApp.maskeditor_is_opended
+            ComfyApp.maskeditor_is_opended = function() {
+                if (document.querySelector("div.maskEditor_sidePanel")) {
+                    return true;
+                }
+                return false;
+            }
+        }
         // api.removeEventListener("executed", this._handleHotReload);
         // api.addEventListener("executed", async (event) => {
         //     console.log("executed", event)
@@ -338,6 +347,18 @@ app.registerExtension({
 
                 // In the refresh button callback
                 const refreshBtn = this.addWidget("button", "refresh", "", async () => {
+                    // Make the node selected. Do what processSelect() does.
+                    try {
+                        // If another node has been selected, it becomes multiselection if we don't call this first.
+                        app.canvas.deselectAll(this);
+                        app.canvas.select(this);
+                        // It's deprecated but we still need to call this to bring the toolbox up
+                        app.canvas.onSelectionChange?.(app.canvas.selected_nodes)
+                        app.canvas.setDirty(true);
+                    } catch (e) {
+                        console.error("Failed to select the node", e);
+                    }
+
                     try {
                         const options = {
                             watch_folders: this.widgets.find(w => w.name === "watch_folders")?.value ?? "",
@@ -365,9 +386,14 @@ app.registerExtension({
                             imageWidget.callback.call(imageWidget);
                         }
 
-                    } catch (error) {
-                        console.error("Error refreshing previews:", error);
-                        // alert("Error refreshing previews: " + error.message);
+                        // Hold shift and click refresh will open the mask editor after refreshing
+                        if (app.shiftDown) {
+                            ComfyApp.clipspace_return_node = this;
+                            ComfyApp.open_maskeditor?.();
+                        }
+
+                    } catch (e) {
+                        console.error("Error refreshing previews:", e);
                     }
                 });
 

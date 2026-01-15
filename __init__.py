@@ -472,6 +472,7 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
     EXPERIMENTAL = True
     FUNCTION = "load_image"
     CATEGORY = "Slowargo"
+    NOT_IDEMPOTENT = True
 
     def load_image(self, image, watch_folders=""):
         # 构造图像路径
@@ -527,6 +528,7 @@ class LoadImageFromAnyPath:
     DESCRIPTION = "Load an image from any path."
     FUNCTION = "load_image"
     CATEGORY = "Slowargo"
+    NOT_IDEMPOTENT = True
 
     def load_image(self, image_path):
         # logger.info(f"[LoadImageFromAnyPath] image:{image_path}")
