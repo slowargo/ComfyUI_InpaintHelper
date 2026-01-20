@@ -17,6 +17,15 @@ app.registerExtension({
                 return false;
             }
         }
+        window.addEventListener('keydown', function(e) {
+            // 检查是否按下 Ctrl+Z (Cmd+Z on Mac)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && document.querySelector("div.maskEditor_sidePanel")) {
+                e.preventDefault(); // 阻止浏览器默认的撤销行为 (Undo textarea)
+                //e.stopImmediatePropagation(); // 阻止其他可能的脚本处理
+                console.log('[slowargo.js] preventDefault for Ctrl+Z ');
+            }
+        }, true); // 注意这里的 true，确保在捕获阶段第一时间拦截
+
         // api.removeEventListener("executed", this._handleHotReload);
         // api.addEventListener("executed", async (event) => {
         //     console.log("executed", event)
@@ -39,6 +48,22 @@ app.registerExtension({
         //         // }
         //     }
         // }
+
+        api.addEventListener("slowargo.js.extension.SaveImageToFileName", async (event) => {
+            // console.log("slowargo.js.extension.SaveImageToFileName executed", event)
+            if (event?.detail?.results) {
+                for (const result of event.detail.results) {
+                    const subfolder = result.subfolder;
+                    const imageName = result.filename;
+                    const type = result.type;
+
+                    const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
+                    const imgUrl = api.apiURL(`/view?filename=${encodeURIComponent(imageName)}${subfolder ? `&subfolder=${encodeURIComponent(subfolder)}` : ''}&type=output${params}`);
+                    console.log("[slowargo.js] SaveImageToFileName executed", result, imgUrl);
+                    window.open(imgUrl, '_blank');
+                }
+            }
+        })
 
     },
     // async nodeCreated(node) {
@@ -265,7 +290,7 @@ app.registerExtension({
             }
         } else if (nodeType?.comfyClass == "LoadImageFromOutputPlusV1") {
             // TODO add sub_folder to remote route
-            // console.log("[slowargo.js] LoadImageFromOutputPlusV1", nodeData, nodeType)
+            // console.log("[slowargo.js] LoadImageFromOutputPlusV1", nodeData, nodeType.prototype.constructor)
             // console.log("[slodole.log("[slowargo.js] onWidgetChanged", name, value)
 
             // Handle widget changes
@@ -336,32 +361,44 @@ app.registerExtension({
             };
         } else if (nodeType?.comfyClass == "LoadRecentImagePlusV1") {
             const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+
             nodeType.prototype.onNodeCreated = function() {
+                const node = this;
+
                 const result = origOnNodeCreated?.apply(this, arguments);
                 // console.log("[slowargo.js] LoadRecentImagePlusV1 onNodeCreated", this.widgets);
+                // console.log("[slowargo.js] LoadRecentImagePlusV1 onNodeCreated", this);
 
+                const imageWidget = this.widgets?.find(w => w.name === "image");
+                if (imageWidget) {
+                    const origCallback = imageWidget.callback;
+                    imageWidget.callback = function(value) {
+                        // console.log("[slowargo.js] LoadRecentImagePlusV1 callback", node);
+                        // Make the node selected. Do what processSelect() does.
+                        try {
+                            // If another node has been selected, it becomes multiselection if we don't call this first.
+                            app.canvas.deselectAll(node);
+                            app.canvas.select(node);
+                            // It's deprecated but we still need to call this to bring the toolbox up
+                            app.canvas.onSelectionChange?.(app.canvas.selected_nodes)
+                            app.canvas.setDirty(node);
+                        } catch (e) {
+                            console.error("Failed to select the node", e);
+                        }
+                        origCallback?.call(this);
+                    };
+                }
                 // const refreshWidget = this.widgets?.find(w => w.name === "refresh");
                 // if (refreshWidget) {
                 //     refreshWidget.hidden = true;
                 // }
 
-                // In the refresh button callback
-                const refreshBtn = this.addWidget("button", "refresh", "", async () => {
-                    // Make the node selected. Do what processSelect() does.
+                const refreshFn = async function() {
                     try {
-                        // If another node has been selected, it becomes multiselection if we don't call this first.
-                        app.canvas.deselectAll(this);
-                        app.canvas.select(this);
-                        // It's deprecated but we still need to call this to bring the toolbox up
-                        app.canvas.onSelectionChange?.(app.canvas.selected_nodes)
-                        app.canvas.setDirty(true);
-                    } catch (e) {
-                        console.error("Failed to select the node", e);
-                    }
+                        // console.log("[slowargo.js] LoadRecentImagePlusV1 refresh",this, node);
 
-                    try {
                         const options = {
-                            watch_folders: this.widgets.find(w => w.name === "watch_folders")?.value ?? "",
+                            watch_folders: node.widgets.find(w => w.name === "watch_folders")?.value ?? "",
                         };
 
                         const response = await api.fetchApi("/slowargo_api/refresh_previews_recent", {
@@ -376,7 +413,7 @@ app.registerExtension({
                         if (!result.success) throw new Error(result.error);
 
                         // Update widgets
-                        const imageWidget = this.widgets?.find(w => w.name === "image");
+                        const imageWidget = node.widgets?.find(w => w.name === "image");
                         // const availableCountWidget = this.widgets?.find(w => w.name === "available_image_count");
 
                         if (imageWidget && result.image_name?.length) {
@@ -388,14 +425,17 @@ app.registerExtension({
 
                         // Hold shift and click refresh will open the mask editor after refreshing
                         if (app.shiftDown) {
-                            ComfyApp.clipspace_return_node = this;
+                            ComfyApp.clipspace_return_node = node;
                             ComfyApp.open_maskeditor?.();
                         }
 
                     } catch (e) {
                         console.error("Error refreshing previews:", e);
                     }
-                });
+                }
+
+                // In the refresh button callback
+                const refreshBtn = this.addWidget("button", "refresh", "", refreshFn);
 
                 // Arrange widgets - move refresh button below watch_folders widget
                 if (refreshBtn) {
@@ -403,6 +443,15 @@ app.registerExtension({
                     const widgets = this.widgets.splice(-1); // Only remove one widget (refreshBtn)
                     this.widgets.splice(targetWidget ? this.widgets.indexOf(targetWidget) + 1 : 0, 0, ...widgets);
                 }
+
+                this.handleAction = async function(action) {
+                    // console.log("[slowargo.js] handleAction", action);
+                    if (action === "Refresh") {
+                        await refreshFn();
+                    }
+                }
+
+                this.constructor.exposedActions = ["Refresh"];
 
                 return result;
             }
