@@ -2,8 +2,6 @@ import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-// const nodeImageCache = new WeakMap();
-
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
@@ -17,14 +15,16 @@ app.registerExtension({
                 return false;
             }
         }
+        // Prevent accidentally undoing canvas textarea when pressing Ctrl+Z in mask editor
         window.addEventListener('keydown', function(e) {
-            // 检查是否按下 Ctrl+Z (Cmd+Z on Mac)
+            // Check if Ctrl+Z (Cmd+Z on Mac) is pressed in mask editor
             if ((e.ctrlKey || e.metaKey) && e.key === 'z' && document.querySelector("div.maskEditor_sidePanel")) {
-                e.preventDefault(); // 阻止浏览器默认的撤销行为 (Undo textarea)
-                //e.stopImmediatePropagation(); // 阻止其他可能的脚本处理
-                console.log('[slowargo.js] preventDefault for Ctrl+Z ');
+                e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
+                // Don't to this. It will break undoing in the mask editor
+                //e.stopImmediatePropagation(); // Prevent other possible script handling.
+                // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
             }
-        }, true); // 注意这里的 true，确保在捕获阶段第一时间拦截
+        }, true); // true to ensure interception at the capture phase
 
         // api.removeEventListener("executed", this._handleHotReload);
         // api.addEventListener("executed", async (event) => {
@@ -33,22 +33,8 @@ app.registerExtension({
         // api.addEventListener("slowargo.js.extension.FloatSwitch", async (event) => {
         //     console.log("slowargo.js.extension.FloatSwitch executed", event)
         // })
-        // const ComfyDialog = app.ui.dialog.constructor;
-        // const oldcreateButtons = ComfyDialog.prototype.createButtons;
-        //
-        // ComfyDialog.prototype.createButtons = function(...args) {
-        //     const res = oldcreateButtons.apply(this, args);
-        //     console.log("[slowargo.js] createButtons", this.constructor.name, args)
-        //     if (this.constructor.name === 'MaskEditorDialog') {
-        //         console.log("[slowargo.js]", this)
-        //         // if (useNewEditor) {
-        //         //     this.addButton("mask_editor_button", "Mask Editor", () => {
-        //         //         app.ui.maskEditor.show(this.node);
-        //         //     });
-        //         // }
-        //     }
-        // }
 
+        // Auto open saved image in new tab
         api.addEventListener("slowargo.js.extension.SaveImageToFileName", async (event) => {
             // console.log("slowargo.js.extension.SaveImageToFileName executed", event)
             if (event?.detail?.results) {
@@ -112,7 +98,7 @@ app.registerExtension({
             //     return result;
             // }
 
-        } else if (nodeType?.comfyClass == "LoadImageFromOutputsPlus") {
+        } else if (nodeType?.comfyClass == "LoadImageFromOutputsPlus") { // deprecated V3 extension
             console.log("[slowargo.js]", nodeData)
             console.log("[slowargo.js]", nodeType)
 
@@ -152,28 +138,9 @@ app.registerExtension({
                 const refreshBtn = this.addWidget("button", "refresh_preview", "Refresh Previews 🔄", async () => {
                     try {
                         const inputPath = this.widgets.find(w => w.name === "image_folder")?.value;
-                        // if (!inputPath) {
-                        //     alert("Please select a folder first");
-                        //     return;
-                        // }
-
-                        // // Get widget values
-                        // const startIndexWidget = this.widgets.find(w => w.name === "start_index");
-                        // const stopIndexWidget = this.widgets.find(w => w.name === "stop_index");
-                        //
-                        // if (stopIndexWidget.value <= startIndexWidget.value) {
-                        //     alert("Stop index must be greater than start index");
-                        //     return;
-                        // }
 
                         const options = {
                             input_path: inputPath,
-                            // include_subfolders: this.widgets.find(w => w.name === "include_subfolders")?.value ?? true,
-                            // sort_method: this.widgets.find(w => w.name === "sort_method")?.value ?? "alphabetical",
-                            // filter_type: this.widgets.find(w => w.name === "filter_type")?.value ?? "none",
-                            // start_index: startIndexWidget.value,
-                            // stop_index: stopIndexWidget.value,
-                            // load_limit: parseInt(this.widgets.find(w => w.name === "load_limit")?.value || "1000")
                         };
 
                         const response = await api.fetchApi("/slowargo_api/refresh_previews", {
@@ -189,34 +156,14 @@ app.registerExtension({
 
                         // Update widgets
                         const imageWidget = this.widgets?.find(w => w.name === "image");
-                        // const availableCountWidget = this.widgets?.find(w => w.name === "available_image_count");
 
                         if (imageWidget && result.image_name?.length) {
-                            // console.log("image_name", result.image_name)
                             imageWidget.options.values = result.image_name;
                             imageWidget.value = result.image_name[0];
                             imageWidget.callback.call(imageWidget);
                         }
-                        // if (imageWidget && result.thumbnails?.length) {
-                        //     imageWidget.options.values = result.thumbnails;
-                        //     imageWidget.value = result.thumbnails[0];
-                        //     this.imageOrder = result.image_order || {};
-                        //     imageWidget.callback.call(imageWidget);
-                        // }
-
-                        // // Update the available count
-                        // if (availableCountWidget) {
-                        //     availableCountWidget.value = result.total_images;
-                        // }
-                        //
-                        // // Update stop_index if needed
-                        // if (result.stop_index !== stopIndexWidget.value) {
-                        //     stopIndexWidget.value = result.stop_index;
-                        // }
-
                     } catch (error) {
                         console.error("Error refreshing previews:", error);
-                        // alert("Error refreshing previews: " + error.message);
                     }
                 });
 
@@ -497,15 +444,7 @@ app.registerExtension({
             id: "slowargo.js.extension.maskeditor.mask",
             label: "Switch to Mask",
             function: async () => {
-                // app.extensionManager.dialog.showAboutDialog();
-                // const isMaskEditorOpen =
-                //     (typeof ComfyApp.maskeditor_is_opended === 'function' && ComfyApp.maskeditor_is_opended()) ||
-                //     (ComfyApp.clipspace_return_node !== undefined && ComfyApp.clipspace_return_node !== null);
-                //
-                // console.log("Hi", isMaskEditorOpen)
-                // console.log("Hi", window.comfyAPI)
-
-                // Switch to Mask tool
+                // Switch to the Mask tool in the Mask Editor
                 let ind = document.querySelectorAll("div.maskEditor_toolPanelIndicator")
                 if (ind.length > 1) {
                     ind[0].click();
@@ -516,6 +455,7 @@ app.registerExtension({
             id: "slowargo.js.extension.maskeditor.eyedropper",
             label: "Switch to Eye Dropper",
             function: async () => {
+                // Switch to the Pen tool and enter color picking in the Mask Editor
                 const colorInput = document.querySelector("div.maskEditor_sidePanel input[type=color]");
                 if (!colorInput) {
                     return
@@ -539,12 +479,12 @@ app.registerExtension({
                         // document.body.style.backgroundColor = hexColor; // 示例效果
                     } catch (e) {
                         // 用户按了 ESC 取消，或者其他错误
-                        console.log('用户取消了拾色，或者其他错误', e);
+                        console.log('Color picking cancelled, or other error occurred', e);
                     }
                 }
                 // 2. 如果不支持 EyeDropper (如 Firefox/Safari)，回退到普通面板
                 else {
-                    console.log('当前浏览器不支持 EyeDropper API，回退到普通面板');
+                    console.log('Current browser does not support EyeDropper API, falling back to regular panel');
                     colorInput.click();
                 }
 

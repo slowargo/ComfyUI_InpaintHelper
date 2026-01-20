@@ -307,7 +307,7 @@ class LoadImageFromOutputsPlus(io.ComfyNode):
 
             # image_folder as default folder
             image_path = folder_paths.get_annotated_filepath(image, def_dir)
-            logger.info(f"[LoadImageFromOutputsPlus] image:{image} image_folder:{image_folder} def_dir: {def_dir} -> {image_path}")
+            # logger.info(f"[LoadImageFromOutputsPlus] image:{image} image_folder:{image_folder} def_dir: {def_dir} -> {image_path}")
 
             output_image, output_mask, _ = process_image_to_tensor(image_path)
         
@@ -711,7 +711,7 @@ class SaveImageToFileName(nodes.SaveImage):
             "type": "output"  # 或 self.type，根據你的節點類型調整
         })
 
-        logger.info(f"[SaveImageToFileName] full_output_folder:{full_output_folder} full_file_path:{full_file_path} args:{save_kwargs}")
+        # logger.info(f"[SaveImageToFileName] full_output_folder:{full_output_folder} full_file_path:{full_file_path} args:{save_kwargs}")
 
         return {"ui": {"images": results}}
 
@@ -854,11 +854,6 @@ WEB_DIRECTORY = "./js"
 
 # Add custom API routes, using router
 
-# @PromptServer.instance.routes.get("/hello")
-# async def get_hello(request):
-#     print(f"""[get_hello]: request: {request}""")
-#     return web.json_response("hello")
-
 @PromptServer.instance.routes.post("/slowargo_api/refresh_previews")
 async def refresh_previews(request):
     try:
@@ -934,6 +929,8 @@ async def refresh_previews_recent(request):
             "error": str(e)
         }, status=500)
 
+# V3 Extension declaration
+
 # class SlowargoExtensions(ComfyExtension):
 #     @override
 #     async def get_node_list(self) -> list[type[io.ComfyNode]]:
@@ -946,6 +943,7 @@ async def refresh_previews_recent(request):
 # async def comfy_entrypoint() -> ComfyExtension:  # ComfyUI calls this to load your extension and its nodes.
 #     return SlowargoExtensions()
 
+# V1 Extension declaration
 NODE_CLASS_MAPPINGS = {
     "FloatSwitch": FloatSwitch,
     "LoadImageFromOutputPlusV1": LoadImageFromOutputPlusV1,
