@@ -558,6 +558,7 @@ class SaveImageToFileName(nodes.SaveImage):
                 "sub_folder": ("STRING", {"default": ""}),
                 "meta_data": ("STRING", {"default": ""}),
                 "force_format": ("COMBO", {"options": ["PNG", "JPEG", "WEBP","auto"], "default": "auto"}),
+                "auto_open": ("BOOLEAN", {"default": False, "label_on": "Open After Save", "label_off": "Don't Open After Save"})
             },
             "hidden": {
                 "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
@@ -567,7 +568,7 @@ class SaveImageToFileName(nodes.SaveImage):
     FUNCTION = "save_image"
     CATEGORY = "Slowargo"
 
-    def save_image(self, image, filename="ComfyUI_output", sub_folder="", meta_data=None, force_format="auto", prompt=None, extra_pnginfo=None):
+    def save_image(self, image, filename="ComfyUI_output", sub_folder="", meta_data=None, force_format="auto", auto_open=False, prompt=None, extra_pnginfo=None):
         """
         Save / Overwrite image with filename.
         保存圖像，支持：
@@ -713,6 +714,8 @@ class SaveImageToFileName(nodes.SaveImage):
         })
 
         # logger.info(f"[SaveImageToFileName] full_output_folder:{full_output_folder} full_file_path:{full_file_path} args:{save_kwargs}")
+        if auto_open:
+            PromptServer.instance.send_sync("slowargo.js.extension.SaveImageToFileName", {"results": results})
 
         return {"ui": {"images": results}}
 
