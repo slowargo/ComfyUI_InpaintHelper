@@ -148,7 +148,7 @@ def get_recent_image_files(
 
     return [display_name for _, display_name in file_items]
 #######################################################################################################################
-# V1 style nodes
+# V3 style nodes
 
 class FloatSwitchV3(io.ComfyNode):
     """
@@ -337,7 +337,7 @@ class FloatSwitch:
                     "step": 0.02,
                     "round": 0.01,
                     "display": "slider",
-                    "tooltip": "Float A (Toggle ON)"
+                    # "tooltip": "Float A (Toggle ON)"
                 }),
                 "float_b": ("FLOAT", {
                     "default": 0.55,
@@ -346,12 +346,13 @@ class FloatSwitch:
                     "step": 0.02,
                     "round": 0.01,
                     "display": "slider",
-                    "tooltip": "Float B (Toggle OFF)"
+                    # "tooltip": "Float B (Toggle OFF)"
                 }),
                 "toggle": ("BOOLEAN", {
                     "default": False,
                     "label_on": "ON",
                     "label_off": "OFF",
+                    "tooltip": "Outputs Float A when on, Float B when off. Overrides with float_ovr if > 0."
                 }),
             },
             "optional": {
@@ -362,7 +363,7 @@ class FloatSwitch:
                     "step": 0.02,
                     "round": 0.01,
                     "display": "number",
-                    "tooltip": "Float C - 如果 > 0 则强制使用此值"
+                    # "tooltip": "Float C - 如果 > 0 则强制使用此值"
                 }),
             },
             "hidden": {
@@ -557,6 +558,7 @@ class SaveImageToFileName(nodes.SaveImage):
                 "sub_folder": ("STRING", {"default": ""}),
                 "meta_data": ("STRING", {"default": ""}),
                 "force_format": ("COMBO", {"options": ["PNG", "JPEG", "WEBP","auto"], "default": "auto"}),
+                "auto_open": ("BOOLEAN", {"default": False, "label_on": "Open After Save", "label_off": "Don't Open After Save"})
             },
             "hidden": {
                 "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
@@ -566,7 +568,7 @@ class SaveImageToFileName(nodes.SaveImage):
     FUNCTION = "save_image"
     CATEGORY = "Slowargo"
 
-    def save_image(self, image, filename="ComfyUI_output", sub_folder="", meta_data=None, force_format="auto", prompt=None, extra_pnginfo=None):
+    def save_image(self, image, filename="ComfyUI_output", sub_folder="", meta_data=None, force_format="auto", auto_open=False, prompt=None, extra_pnginfo=None):
         """
         Save / Overwrite image with filename.
         保存圖像，支持：
@@ -712,6 +714,8 @@ class SaveImageToFileName(nodes.SaveImage):
         })
 
         # logger.info(f"[SaveImageToFileName] full_output_folder:{full_output_folder} full_file_path:{full_file_path} args:{save_kwargs}")
+        if auto_open:
+            PromptServer.instance.send_sync("slowargo.js.extension.SaveImageToFileName", {"results": results})
 
         return {"ui": {"images": results}}
 
@@ -774,78 +778,6 @@ class ExtractSubFolder:
         # logger.info(f"[ExtractSubFolder] sub_folder: {sub_folder}")
         
         return (sub_folder,)
-
-class FloatSwitch:
-    """
-    浮点数切换器
-    开关打开(toggle=True) → 输出 float_a
-    开关关闭(toggle=False) → 输出 float_b
-    当 float_ovr > 0 时，强制使用 float_ovr 的值（优先级最高）
-    """
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "float_a": ("FLOAT", {
-                    "default": 0.32,
-                    "min": 0.1,
-                    "max": 0.9,
-                    "step": 0.02,
-                    "round": 0.01,
-                    "display": "slider",
-                    "tooltip": "Float A (Toggle ON)"
-                }),
-                "float_b": ("FLOAT", {
-                    "default": 0.55,
-                    "min": 0.1,
-                    "max": 0.9,
-                    "step": 0.02,
-                    "round": 0.01,
-                    "display": "slider",
-                    "tooltip": "Float B (Toggle OFF)"
-                }),
-                "toggle": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "ON",
-                    "label_off": "OFF",
-                }),
-            },
-            "optional": {
-                "float_ovr": ("FLOAT", {
-                    "default": 0.0,
-                    "min": 0.0,
-                    "max": 0.9,
-                    "step": 0.02,
-                    "round": 0.01,
-                    "display": "number",
-                    "tooltip": "Float C - 如果 > 0 则强制使用此值"
-                }),
-            },
-            "hidden": {
-                "node_id": "UNIQUE_ID"
-            }
-        }
-
-    RETURN_TYPES = ("FLOAT",)
-    RETURN_NAMES = ("selected_float",)
-
-    FUNCTION = "do_switch"
-    CATEGORY = "Slowargo"
-
-    def do_switch(self, float_a, float_b, toggle, float_ovr=0.0, node_id=None):
-        if toggle:
-            selected = float_a
-        else:
-            selected = float_b
-
-        # override 优先级最高
-        if float_ovr > 0:
-            selected = float_ovr
-
-        # logger.info(f"[FloatSwitch] node_id:{node_id} selected:{selected}")
-        # PromptServer.instance.send_sync("slowargo.js.extension.FloatSwitch", {"node_id": node_id, "selected_value": selected})
-
-        return (selected,)
 
 ##############################################
 
