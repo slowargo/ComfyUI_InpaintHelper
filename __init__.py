@@ -800,20 +800,88 @@ class RememberStrings:
                     "default": 10,
                     "tooltip": "Maximum number of entries to store."
                 })
-            },
-            "hidden": {
-                "node_id": "UNIQUE_ID"
             }
         }
 
     FUNCTION = "remember_strings"
     CATEGORY = "Slowargo"
 
-    def remember_strings(self, string, store_file, max_entries=10, node_id=None):
-        # trim string, trim store_file，解析store_file格式确定文件路径，文件如果存在则node_id 作为 key，读入已记忆的string列表。
+    def remember_strings(self, string, store_file, max_entries=10):
+        # trim string, trim store_file，解析store_file格式确定文件路径，文件如果存在，读入已记忆的string列表。
         # 判断是否已记忆过该string，如果已记忆则将其移动到列表的顶部，否则添加到列表顶部。记录条数不超过 max_entries
-        # 之后保存回文件（确保string内容不会破坏json格式）
-
+        # 之后保存回文件（确保string内容不会破坏json格式）。
+        
+        # Trim the inputs
+        string = string.strip()
+        store_file = store_file.strip()
+        
+        # 解析 store_file 格式，支持类似 "filename.json[output]" 的格式
+        # 默认情况下，如果没有指定目录类型，则直接作为文件名处理
+        if store_file.endswith(']'):
+            # 查找最后一个 '[' 的位置
+            last_bracket_idx = store_file.rfind('[')
+            if last_bracket_idx != -1:
+                file_name = store_file[:last_bracket_idx]
+                folder_type = store_file[last_bracket_idx+1:-1]  # 提取 [] 中的内容
+                
+                # 根据类型获取对应的目录
+                if folder_type.lower() == "input":
+                    base_dir = folder_paths.get_input_directory()
+                elif folder_type.lower() == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    # 默认使用 ComfyUI 的用户数据目录
+                    base_dir = folder_paths.get_output_directory()  # 默认为output目录
+                
+                file_path = os.path.join(base_dir, file_name)
+            else:
+                # 格式不符合预期，直接使用原文件名
+                file_path = store_file
+        else:
+            # 没有指定目录类型，直接作为文件路径
+            file_path = store_file
+        
+        # 确保目录存在
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # 读取已存在的列表，如果文件不存在则创建空列表
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    stored_strings = json.load(f)
+                    if not isinstance(stored_strings, list):
+                        stored_strings = []  # 如果不是列表格式，则重置为空列表
+            except (json.JSONDecodeError, IOError):
+                stored_strings = []  # 如果读取失败，则初始化为空列表
+        else:
+            stored_strings = []
+        
+        # 确保字符串安全，避免破坏JSON格式
+        # 需要转义可能破坏JSON的字符
+        safe_string = json.dumps(string, ensure_ascii=True)[1:-1]  # 序列化后去掉首尾引号
+        string = safe_string
+        
+        # 检查字符串是否已经存在于列表中
+        if string in stored_strings:
+            # 如果已存在，移除它并插入到列表顶部
+            stored_strings.remove(string)
+            stored_strings.insert(0, string)
+        else:
+            # 如果不存在，插入到列表顶部
+            stored_strings.insert(0, string)
+        
+        # 限制条目数量
+        stored_strings = stored_strings[:max_entries]
+        
+        # 将更新后的列表保存回文件
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(stored_strings, f, ensure_ascii=False, indent=2)
+        except IOError as e:
+            print(f"Error saving to file {file_path}: {e}")
+        
+        # 返回当前存储的所有字符串（可选）
+        return (stored_strings,)
 
 ##############################################
 
