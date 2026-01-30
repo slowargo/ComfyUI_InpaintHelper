@@ -779,6 +779,42 @@ class ExtractSubFolder:
         
         return (sub_folder,)
 
+class RememberStrings:
+    """
+    Store input string to json. If the string has been remembered, move it to the top.
+    """
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "string": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "tooltip": "Input string"
+                }),
+                "store_file": ("STRING", {
+                    "default": "remember_strings.json[output]",
+                    "tooltip": "Store the string in this file in json format."
+                }),
+                "max_entries": ("INT", {
+                    "default": 10,
+                    "tooltip": "Maximum number of entries to store."
+                })
+            },
+            "hidden": {
+                "node_id": "UNIQUE_ID"
+            }
+        }
+
+    FUNCTION = "remember_strings"
+    CATEGORY = "Slowargo"
+
+    def remember_strings(self, string, store_file, max_entries=10, node_id=None):
+        # trim string, trim store_file，解析store_file格式确定文件路径，文件如果存在则node_id 作为 key，读入已记忆的string列表。
+        # 判断是否已记忆过该string，如果已记忆则将其移动到列表的顶部，否则添加到列表顶部。记录条数不超过 max_entries
+        # 之后保存回文件（确保string内容不会破坏json格式）
+
+
 ##############################################
 
 # Set the web directory, any .js file in that directory will be loaded by the frontend as a frontend extension
