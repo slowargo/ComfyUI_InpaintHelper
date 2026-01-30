@@ -813,75 +813,61 @@ class RememberStrings:
         
         # Trim the inputs
         string = string.strip()
+
+        if not string: return ("",)
+
+        file_path, stored_strings = RememberStrings.read_stored_strings(store_file)
+
+        # 更新
+        # 确保字符串安全，避免破坏JSON格式
+        # 需要转义可能破坏JSON的字符
+        if string in stored_strings:
+            stored_strings.remove(string)
+        stored_strings.insert(0, string)
+        stored_strings = stored_strings[:max_entries]
+
+        # 保存文件
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                # json.dump 会自动处理所有特殊字符转义，非常安全
+                json.dump(stored_strings, f, ensure_ascii=False, indent=2)
+        except IOError as e:
+            logger.error(f"[RememberStrings] Save error: {e}")
+
+        PromptServer.instance.send_sync("slowargo.js.extension.RememberStrings", {"strings": stored_strings})
+        return ("",)
+
+    @staticmethod
+    def read_stored_strings(store_file):
         store_file = store_file.strip()
-        
-        # 解析 store_file 格式，支持类似 "filename.json[output]" 的格式
-        # 默认情况下，如果没有指定目录类型，则直接作为文件名处理
-        if store_file.endswith(']'):
-            # 查找最后一个 '[' 的位置
-            last_bracket_idx = store_file.rfind('[')
-            if last_bracket_idx != -1:
-                file_name = store_file[:last_bracket_idx]
-                folder_type = store_file[last_bracket_idx+1:-1]  # 提取 [] 中的内容
-                
-                # 根据类型获取对应的目录
-                if folder_type.lower() == "input":
-                    base_dir = folder_paths.get_input_directory()
-                elif folder_type.lower() == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    # 默认使用 ComfyUI 的用户数据目录
-                    base_dir = folder_paths.get_output_directory()  # 默认为output目录
-                
-                file_path = os.path.join(base_dir, file_name)
-            else:
-                # 格式不符合预期，直接使用原文件名
-                file_path = store_file
+        # 使用正则表达式解析 store_file 格式，支持类似 "filename.json[output]" 的格式
+        # 忽略文件名和 [ 之间的空格
+        match = re.match(r"^(.+?)\s*\[([^\]]+)\]$", store_file)
+        if match:
+            file_name = match.group(1).strip()  # 提取文件名部分并去除空格
+            folder_type = match.group(2).lower()  # 提取 [] 中的内容并转为小写
+
+            base_dir = folder_paths.get_input_directory() if folder_type == "input" else folder_paths.get_output_directory()
+
+            logger.info(f"[RememberStrings] base_dir:{base_dir} file_name:{file_name}")
+
+            file_path = os.path.join(base_dir, file_name)
         else:
-            # 没有指定目录类型，直接作为文件路径
-            file_path = store_file
-        
-        # 确保目录存在
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        
+            # 如果没有格式，默认放 output
+            file_path = os.path.join(folder_paths.get_output_directory(), store_file)
         # 读取已存在的列表，如果文件不存在则创建空列表
+        stored_strings = []
         if os.path.exists(file_path):
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    stored_strings = json.load(f)
-                    if not isinstance(stored_strings, list):
-                        stored_strings = []  # 如果不是列表格式，则重置为空列表
-            except (json.JSONDecodeError, IOError):
-                stored_strings = []  # 如果读取失败，则初始化为空列表
-        else:
-            stored_strings = []
-        
-        # 确保字符串安全，避免破坏JSON格式
-        # 需要转义可能破坏JSON的字符
-        safe_string = json.dumps(string, ensure_ascii=True)[1:-1]  # 序列化后去掉首尾引号
-        string = safe_string
-        
-        # 检查字符串是否已经存在于列表中
-        if string in stored_strings:
-            # 如果已存在，移除它并插入到列表顶部
-            stored_strings.remove(string)
-            stored_strings.insert(0, string)
-        else:
-            # 如果不存在，插入到列表顶部
-            stored_strings.insert(0, string)
-        
-        # 限制条目数量
-        stored_strings = stored_strings[:max_entries]
-        
-        # 将更新后的列表保存回文件
-        try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(stored_strings, f, ensure_ascii=False, indent=2)
-        except IOError as e:
-            print(f"Error saving to file {file_path}: {e}")
-        
-        # 返回当前存储的所有字符串（可选）
-        return (stored_strings,)
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        stored_strings = data
+            except Exception as e:
+                logger.warning(f"[RememberStrings] Read error: {e}")
+        return file_path, stored_strings
+
 
 ##############################################
 
@@ -987,6 +973,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadRecentImagePlusV1": LoadRecentImagePlusV1,
     "SaveImageToFileName": SaveImageToFileName,
     "ExtractSubFolder": ExtractSubFolder,
+    "RememberStrings": RememberStrings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -996,4 +983,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadRecentImagePlusV1": "Load Recent Image",
     "SaveImageToFileName": "Save Image to Specified File Name",
     "ExtractSubFolder": "Extract Sub Folder",
+    "RememberStrings": "Remember Recent Strings",
 }
