@@ -515,6 +515,14 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
 
         return get_recent_image_files(directories)
 
+    @classmethod
+    def IS_CHANGED(s, image,watch_folders=""):
+        image_path = folder_paths.get_annotated_filepath(image)
+        m = hashlib.sha256()
+        with open(image_path, 'rb') as f:
+            m.update(f.read())
+        return m.digest().hex()
+
 class LoadImageFromAnyPath:
     @classmethod
     def INPUT_TYPES(cls):
@@ -650,7 +658,7 @@ class SaveImageToFileName(nodes.SaveImage):
                     # 恢復文本元數據
                     # for key, value in metadata.get("text", {}).items():
                     for key, value in metadata.items():
-                        logger.info(f"[SaveImageToFileName] meta_data key:{key} ")
+                        # logger.info(f"[SaveImageToFileName] meta_data key:{key} ")
                         if isinstance(value, str):
                             pnginfo.add_text(key, value)
                         else:
@@ -660,6 +668,7 @@ class SaveImageToFileName(nodes.SaveImage):
 
                     # 恢復 ICC Profile
                     if metadata.get("icc_profile_base64"):
+                        import base64
                         icc_bytes = base64.b64decode(metadata["icc_profile_base64"])
                         icc_profile = icc_bytes
             except Exception as e:

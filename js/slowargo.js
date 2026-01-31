@@ -447,12 +447,12 @@ app.registerExtension({
                     // 1. 请求后端获取数据
                     const response = await api.fetchApi(`/slowargo_api/get_string_history?store_file=${encodeURIComponent(store_file)}`);
                     let {entries} = await response.json();
-                    console.log("[slowargo.js] get_string_history", entries);
+                    // console.log("[slowargo.js] get_string_history", entries);
 
                     // 2. 创建 Popup 内容
                     const content = $el("div", {
                         style: {
-                            minWidth: "400px",
+                            minWidth: "600px",
                             maxHeight: "500px",
                             overflowY: "auto",
                             display: "flex",
