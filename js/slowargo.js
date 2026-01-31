@@ -1,6 +1,7 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { $el } from "../../scripts/ui.js";
 
 app.registerExtension({
     name: "slowargo.js.extension",
@@ -403,7 +404,6 @@ app.registerExtension({
                 return result;
             }
         } else if (nodeType?.comfyClass == "RunButtonNode") {
-            // 当节点被创建时执行
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
@@ -413,7 +413,7 @@ app.registerExtension({
                 // widget.type = "hidden"; // 隐藏原始输入框
                 widget.hidden = true;
 
-                const runFn = async function() {
+                const runFn = async function () {
                     // 逻辑：增加计数器触发后端更新
                     widget.value += 1;
 
@@ -423,7 +423,7 @@ app.registerExtension({
 
                 this.addWidget("button", "Run Prompt", null, runFn);
 
-                this.handleAction = async function(action) {
+                this.handleAction = async function (action) {
                     if (action === "Run") {
                         await runFn();
                     }
@@ -433,6 +433,91 @@ app.registerExtension({
 
                 return r;
             };
+        } else if (nodeType?.comfyClass === "RememberStrings") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                this.addWidget("button", "View History 📂", null, () => {
+                    this.showHistoryPopup();
+                });
+
+                // 弹出窗口逻辑
+                this.showHistoryPopup = async () => {
+                    const store_file = this.widgets.find(w => w.name === "store_file").value;
+
+                    // 1. 请求后端获取数据
+                    const response = await api.fetchApi(`/slowargo_api/get_string_history?store_file=${encodeURIComponent(store_file)}`);
+                    let {entries} = await response.json();
+                    console.log("[slowargo.js] get_string_history", entries);
+
+                    // 2. 创建 Popup 内容
+                    const content = $el("div", {
+                        style: {
+                            minWidth: "400px",
+                            maxHeight: "500px",
+                            overflowY: "auto",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "8px",
+                            padding: "10px"
+                        }
+                    });
+
+                    const renderList = (data) => {
+                        content.innerHTML = "";
+                        data.forEach(item => {
+                            const row = $el("div", {
+                                style: {
+                                    display: "flex",
+                                    alignItems: "center",
+                                    padding: "8px",
+                                    background: "#353535",
+                                    borderRadius: "4px",
+                                    gap: "10px"
+                                }
+                            });
+
+                            // 点击内容回填并关闭
+                            const text = $el("div", {
+                                textContent: item.content,
+                                style: {flex: 1, cursor: "pointer", whiteSpace: "pre-wrap", fontSize: "12px"},
+                                onclick: () => {
+                                    this.widgets.find(w => w.name === "string").value = item.content;
+                                    popup.close(); // 选中后自动关闭
+                                }
+                            });
+
+                            const pinBtn = $el("button", {
+                                textContent: item.pinned ? "📌" : "📍",
+                                style: {
+                                    background: "none",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    fontSize: "16px",
+                                    opacity: item.pinned ? 1 : 0.3
+                                },
+                                onclick: async () => {
+                                    const res = await api.fetchApi("/slowargo_api/toggle_string_history_pin", {
+                                        method: "POST",
+                                        body: JSON.stringify({content: item.content, store_file})
+                                    });
+                                    const nextData = await res.json();
+                                    renderList(nextData.entries); // 局部刷新
+                                }
+                            });
+
+                            row.appendChild(text);
+                            row.appendChild(pinBtn);
+                            content.appendChild(row);
+                        });
+                    };
+
+                    renderList(entries);
+
+                    // 3. 使用 ComfyUI 内部 Dialog 弹出
+                    const popup = new (await import("../../../scripts/ui/dialog.js")).ComfyDialog();
+                    popup.show(content);
+                }
+            }
         }
 
         console.log("[slowargo.js] init done", nodeType?.comfyClass)

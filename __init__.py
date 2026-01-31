@@ -874,7 +874,7 @@ class RememberStrings:
 
             base_dir = folder_paths.get_input_directory() if folder_type == "input" else folder_paths.get_output_directory()
 
-            logger.info(f"[RememberStrings] base_dir:{base_dir} file_name:{file_name}")
+            # logger.info(f"[RememberStrings] base_dir:{base_dir} file_name:{file_name}")
 
             file_path = os.path.join(base_dir, file_name)
         else:
@@ -895,6 +895,8 @@ class RememberStrings:
                         ]
             except Exception as e:
                 logger.warning(f"[RememberStrings] Read error: {e}")
+
+        # logger.info(f"[RememberStrings] file_path:{file_path}")
         return file_path, stored_entries
 
 class RunButtonNode:
@@ -928,7 +930,7 @@ WEB_DIRECTORY = "./js"
 # Add custom API routes, using router
 
 @PromptServer.instance.routes.post("/slowargo_api/refresh_previews")
-async def refresh_previews(request):
+async def refresh_previews_api(request):
     try:
         data = await request.json()
         # if not data.get("input_path"):
@@ -966,7 +968,7 @@ async def refresh_previews(request):
         }, status=500)
 
 @PromptServer.instance.routes.get("/slowargo_api/refresh_previews")
-async def refresh_previews_v1(request):
+async def refresh_previews_v1_api(request):
     try:
         # use get_file_names to get the lates file names
         file_names = LoadImageFromOutputPlusV1.get_file_names()
@@ -981,7 +983,7 @@ async def refresh_previews_v1(request):
         }, status=500)
 
 @PromptServer.instance.routes.post("/slowargo_api/refresh_previews_recent")
-async def refresh_previews_recent(request):
+async def refresh_previews_recent_api(request):
     try:
         # logger.info(f"[refresh_previews_recent] request: {request}")
         data = await request.json()
@@ -1001,6 +1003,35 @@ async def refresh_previews_recent(request):
             "success": False,
             "error": str(e)
         }, status=500)
+
+# 获取历史记录接口
+@PromptServer.instance.routes.get("/slowargo_api/get_string_history")
+async def get_string_history_api(request):
+    store_file = request.query.get("store_file", "")
+    _, entries = RememberStrings.read_stored_strings(store_file)
+    return web.json_response({"entries": entries})
+
+# Toggle Pin 接口 (修改返回值为最新列表)
+@PromptServer.instance.routes.post("/slowargo_api/toggle_string_history_pin")
+async def toggle_string_history_pin_api(request):
+    json_data = await request.json()
+    content = json_data.get("content")
+    store_file = json_data.get("store_file")
+
+    file_path, stored_entries = RememberStrings.read_stored_strings(store_file)
+
+    for entry in stored_entries:
+        if entry["content"] == content:
+            entry["pinned"] = not entry.get("pinned", False)
+            break
+
+    # 排序：Pin 优先，其余按位置
+    stored_entries.sort(key=lambda x: x.get("pinned", False), reverse=True)
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(stored_entries, f, ensure_ascii=False, indent=2)
+
+    return web.json_response({"entries": stored_entries})
 
 # V3 Extension declaration
 
