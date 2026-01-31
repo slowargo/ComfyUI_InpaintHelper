@@ -816,27 +816,48 @@ class RememberStrings:
 
         if not string: return ("",)
 
-        file_path, stored_strings = RememberStrings.read_stored_strings(store_file)
+        file_path, stored_entries = RememberStrings.read_stored_strings(store_file)
 
-        # 更新
-        # 确保字符串安全，避免破坏JSON格式
-        # 需要转义可能破坏JSON的字符
-        if string in stored_strings:
-            stored_strings.remove(string)
-        stored_strings.insert(0, string)
-        stored_strings = stored_strings[:max_entries]
+        # 1. 查找当前字符串是否已存在
+        existing_entry = next((item for item in stored_entries if item["content"] == string), None)
+
+        if existing_entry:
+            # 如果存在，先移除旧的（为了重新排序到顶端）
+            is_pinned = existing_entry.get("pinned", False)
+            stored_entries.remove(existing_entry)
+        else:
+            is_pinned = False
+
+        # 2. 插入到最前面
+        new_entry = {"content": string, "pinned": is_pinned}
+        stored_entries.insert(0, new_entry)
+
+        # 3. 淘汰逻辑
+        # 我们需要保留所有 pinned=True 的，以及排在前面的非 pinned 条目，总数不超过 max_entries
+        pinned_items = [item for item in stored_entries if item.get("pinned")]
+        unpinned_items = [item for item in stored_entries if not item.get("pinned")]
+
+        # 计算还能容纳多少个非置顶条目
+        # 即使 pinned 很多，我们也至少保证总数逻辑或优先保证 pinned
+        allowed_unpinned_count = max(0, max_entries - len(pinned_items))
+        final_entries = pinned_items + unpinned_items[:allowed_unpinned_count]
+
+        # 如果你希望最新的操作始终排在最前（无论是否 pin），可以用下面的简单逻辑：
+        # 但通常逻辑是：Pinned 永远在顶端，新的在 Pinned 下方，或者干脆只按时间排，淘汰时跳过 Pinned。
+
+        # 重新排序：Pinned 在上，其余按新旧排
+        final_entries = sorted(final_entries, key=lambda x: x.get("pinned", False), reverse=True)
 
         # 保存文件
         try:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
-                # json.dump 会自动处理所有特殊字符转义，非常安全
-                json.dump(stored_strings, f, ensure_ascii=False, indent=2)
+                json.dump(final_entries, f, ensure_ascii=False, indent=2)
         except IOError as e:
             logger.error(f"[RememberStrings] Save error: {e}")
 
-        PromptServer.instance.send_sync("slowargo.js.extension.RememberStrings", {"strings": stored_strings})
-        return ("",)
+        PromptServer.instance.send_sync("slowargo.js.extension.RememberStrings", {"entries": final_entries})
+        return (string,)
 
     @staticmethod
     def read_stored_strings(store_file):
@@ -856,17 +877,22 @@ class RememberStrings:
         else:
             # 如果没有格式，默认放 output
             file_path = os.path.join(folder_paths.get_output_directory(), store_file)
+
         # 读取已存在的列表，如果文件不存在则创建空列表
-        stored_strings = []
+        stored_entries = []
         if os.path.exists(file_path):
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     if isinstance(data, list):
-                        stored_strings = data
+                        # 兼容老格式：如果读取到的是纯字符串，自动转为对象
+                        stored_entries = [
+                            item if isinstance(item, dict) else {"content": item, "pinned": False}
+                            for item in data
+                        ]
             except Exception as e:
                 logger.warning(f"[RememberStrings] Read error: {e}")
-        return file_path, stored_strings
+        return file_path, stored_entries
 
 
 ##############################################
