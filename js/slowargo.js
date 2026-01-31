@@ -402,7 +402,38 @@ app.registerExtension({
 
                 return result;
             }
-        } 
+        } else if (nodeType?.comfyClass == "RunButtonNode") {
+            // 当节点被创建时执行
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+
+                // 找到我们定义的 trigger_count 挂件
+                const widget = this.widgets.find((w) => w.name === "trigger_count");
+                // widget.type = "hidden"; // 隐藏原始输入框
+                widget.hidden = true;
+
+                const runFn = async function() {
+                    // 逻辑：增加计数器触发后端更新
+                    widget.value += 1;
+
+                    // 核心：手动触发整个工作流的执行
+                    app.queuePrompt(0);
+                }
+
+                this.addWidget("button", "Run Prompt", null, runFn);
+
+                this.handleAction = async function(action) {
+                    if (action === "Run") {
+                        await runFn();
+                    }
+                }
+
+                this.constructor.exposedActions = ["Run"];
+
+                return r;
+            };
+        }
 
         console.log("[slowargo.js] init done", nodeType?.comfyClass)
     },

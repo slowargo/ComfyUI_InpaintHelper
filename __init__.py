@@ -803,6 +803,9 @@ class RememberStrings:
             }
         }
 
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("string",)
+
     FUNCTION = "remember_strings"
     CATEGORY = "Slowargo"
 
@@ -856,7 +859,7 @@ class RememberStrings:
         except IOError as e:
             logger.error(f"[RememberStrings] Save error: {e}")
 
-        PromptServer.instance.send_sync("slowargo.js.extension.RememberStrings", {"entries": final_entries})
+        # PromptServer.instance.send_sync("slowargo.js.extension.RememberStrings", {"entries": final_entries})
         return (string,)
 
     @staticmethod
@@ -894,6 +897,28 @@ class RememberStrings:
                 logger.warning(f"[RememberStrings] Read error: {e}")
         return file_path, stored_entries
 
+class RunButtonNode:
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                # 这里的参数名要与前端对应
+                "trigger_count": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            },
+        }
+
+    RETURN_TYPES = ("INT",)
+    RETURN_NAMES = ("trigger_count",)
+
+    FUNCTION = "do_run"
+    CATEGORY = "Slowargo"
+
+    def do_run(self, trigger_count):
+        # print(f"按钮被点击了！当前触发次数: {trigger_count}")
+        return trigger_count
 
 ##############################################
 
@@ -1000,6 +1025,7 @@ NODE_CLASS_MAPPINGS = {
     "SaveImageToFileName": SaveImageToFileName,
     "ExtractSubFolder": ExtractSubFolder,
     "RememberStrings": RememberStrings,
+    "RunButtonNode": RunButtonNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1010,4 +1036,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveImageToFileName": "Save Image to Specified File Name",
     "ExtractSubFolder": "Extract Sub Folder",
     "RememberStrings": "Remember Recent Strings",
+    "RunButtonNode": "Run Button",
 }
