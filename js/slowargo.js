@@ -469,21 +469,36 @@ app.registerExtension({
                                 style: {
                                     display: "flex",
                                     alignItems: "center",
-                                    padding: "8px",
+                                    padding: "5px",
                                     background: "#353535",
-                                    borderRadius: "4px",
-                                    gap: "10px"
+                                    borderRadius: "5px",
+                                    overflow: "hidden", // 确保子元素撑满时不会超出圆角
+                                    gap: "2px"
                                 }
                             });
 
                             // 点击内容回填并关闭
                             const text = $el("div", {
                                 textContent: item.content,
-                                style: {flex: 1, cursor: "pointer", whiteSpace: "pre-wrap", fontSize: "12px"},
+                                style: {
+                                    flex: 1,
+                                    alignSelf: "stretch",    // 关键：高度撑满父容器
+                                    display: "flex",        // 关键：为了内部文字垂直居中
+                                    alignItems: "center",   // 关键：文字垂直居中
+                                    padding: "5px 5px",    // 这里保留你需要的文字上下边距
+                                    cursor: "pointer",
+                                    fontSize: "10px",
+                                    color: "#ddd",
+                                    whiteSpace: "pre-wrap",
+                                    transition: "background 0.2s"
+                                },
                                 onclick: () => {
                                     this.widgets.find(w => w.name === "string").value = item.content;
                                     popup.close(); // 选中后自动关闭
-                                }
+                                },
+                                // 只在文本感应区显示悬停效果
+                                // onmouseenter: (e) => e.target.style.background = "#454545",
+                                // onmouseleave: (e) => e.target.style.background = "transparent"
                             });
 
                             const pinBtn = $el("button", {
