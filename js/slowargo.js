@@ -510,7 +510,8 @@ app.registerExtension({
                                     fontSize: "16px",
                                     opacity: item.pinned ? 1 : 0.3
                                 },
-                                onclick: async () => {
+                                onclick: async (e) => {
+                                    e.stopPropagation();
                                     const res = await api.fetchApi("/slowargo_api/toggle_string_history_pin", {
                                         method: "POST",
                                         body: JSON.stringify({content: item.content, store_file})
@@ -520,8 +521,32 @@ app.registerExtension({
                                 }
                             });
 
+                            const deleteBtn = $el("button", {
+                                textContent: "🗑️",
+                                style: {
+                                    background: "none",
+                                    border: "none",
+                                    cursor: "pointer",
+                                    fontSize: "16px",
+                                    opacity: 0.6,
+                                    // padding: "0 5px"
+                                },
+                                onclick: async (e) => {
+                                    e.stopPropagation(); // 防止触发回填逻辑
+                                    if (confirm("Delete this entry?")) {
+                                        const res = await api.fetchApi("/slowargo_api/delete_string_history", {
+                                            method: "POST",
+                                            body: JSON.stringify({ content: item.content, store_file })
+                                        });
+                                        const nextData = await res.json();
+                                        renderList(nextData.entries); // 刷新列表
+                                    }
+                                }
+                            });
+
                             row.appendChild(text);
                             row.appendChild(pinBtn);
+                            row.appendChild(deleteBtn);
                             content.appendChild(row);
                         });
                     };
@@ -530,6 +555,24 @@ app.registerExtension({
 
                     // 3. 使用 ComfyUI 内部 Dialog 弹出
                     const popup = new (await import("../../../scripts/ui/dialog.js")).ComfyDialog();
+
+                    // 手动 Esc 监听函数
+                    const handleEsc = (e) => {
+                        if (e.key === "Escape") {
+                            popup.close();
+                            // 移除监听，避免影响 ComfyUI 的其他组件
+                            window.removeEventListener("keydown", handleEsc);
+                        }
+                    };
+
+                    window.addEventListener("keydown", handleEsc);
+                    // 修改 popup 的 close 方法，确保点击遮罩层关闭时也能移除监听
+                    const originalClose = popup.close;
+                    popup.close = () => {
+                        window.removeEventListener("keydown", handleEsc);
+                        originalClose.apply(popup);
+                    };
+
                     popup.show(content);
                 }
             }

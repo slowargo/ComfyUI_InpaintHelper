@@ -1017,8 +1017,8 @@ async def refresh_previews_recent_api(request):
 @PromptServer.instance.routes.get("/slowargo_api/get_string_history")
 async def get_string_history_api(request):
     store_file = request.query.get("store_file", "")
-    _, entries = RememberStrings.read_stored_strings(store_file)
-    return web.json_response({"entries": entries})
+    _, stored_entries = RememberStrings.read_stored_strings(store_file)
+    return web.json_response({"entries": stored_entries})
 
 # Toggle Pin 接口 (修改返回值为最新列表)
 @PromptServer.instance.routes.post("/slowargo_api/toggle_string_history_pin")
@@ -1039,6 +1039,29 @@ async def toggle_string_history_pin_api(request):
 
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(stored_entries, f, ensure_ascii=False, indent=2)
+
+    return web.json_response({"entries": stored_entries})
+
+# 3. 删除记录接口
+@PromptServer.instance.routes.post("/slowargo_api/delete_string_history")
+async def delete_entry_api(request):
+    json_data = await request.json()
+    content = json_data.get("content")
+    store_file = json_data.get("store_file")
+
+    file_path, stored_entries = RememberStrings.read_stored_strings(store_file)
+
+    # 过滤掉匹配的内容
+    initial_count = len(stored_entries)
+    stored_entries = [entry for entry in stored_entries if entry["content"] != content]
+
+    # 只有在确实删除了内容时才写入文件
+    if len(stored_entries) < initial_count:
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(stored_entries, f, ensure_ascii=False, indent=2)
+        except IOError as e:
+            logger.error(f"[RememberStrings] Delete save error: {e}")
 
     return web.json_response({"entries": stored_entries})
 
