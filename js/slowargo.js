@@ -472,7 +472,7 @@ app.registerExtension({
                                     padding: "5px",
                                     background: "#353535",
                                     borderRadius: "5px",
-                                    overflow: "hidden", // 确保子元素撑满时不会超出圆角
+                                    // overflow: "hidden", // 确保子元素撑满时不会超出圆角
                                     gap: "2px"
                                 }
                             });
