@@ -1,6 +1,10 @@
 # ComfyUI InpaintHelper 扩展
 
-一组用于提高 ComfyUI 重绘流程的节点。
+## 简介
+
+#### 一组用于提高 ComfyUI 重绘流程的节点。我在 inpaint 的时候会经常进行以下操作，如果你也有类似的需求，此扩展能帮到你：
+- 频繁切换 denoise 强度, 较弱强度用于修复细节和细微错误（例如眼睛、嘴唇），较高强度用于根据提示词重新生成画面（例如肢体错误、手的形状错误）
+- 
 
 ## 功能特性
 
@@ -26,8 +30,8 @@
   - 此节点还导出了 rgthree action (Refresh action) 可结合 rgthree-comfy 的 Fast Actions 节点使用。
 
 - **Load Image (from Any Path)**: 从任意路径加载图像
-  - 从 ComfyUI 以往的路径加载图像
-  - 
+  - 从 ComfyUI 以外的路径加载图像
+  - 可用于批量处理图片。例如使用 listdir 节点获取文件列表，传入此节点逐个处理。
 
 #### 图像保存节点
 - **Save Image to Specified File Name**: 带有自定义文件名的增强保存功能
@@ -41,6 +45,15 @@
 - **Extract Sub Folder**: 从给定文件路径中提取子目录
   - 可配置提取级别（文件夹层数）
   - 有助于组织输出文件
+- **Remember Recent Strings**: 带有记忆功能多行字符串输入框
+  - 将输入字符串存储到 JSON 文件中，作为常用文本（例如 Prompt）的历史记录
+  - 如果字符串已存在，则将其移至列表顶部；如果不存在，则添加
+  - 支持“置顶”（pin）功能，置顶的条目会保持在列表前端
+  - 可通过前端界面管理（查看、置顶、删除）
+- **Run Button**: 运行按钮
+  - 点击按钮会触发整个 ComfyUI 工作流的执行
+  - 可以在 workflow 多个任意位置放置此节点，方便就近触发（当然也可以直接用系统快捷键触发）
+  - 此节点还导出了 rgthree action (Run action) 可结合 rgthree-comfy 的 Fast Actions 节点使用。
 
 #### 其他增强
 - 快捷键

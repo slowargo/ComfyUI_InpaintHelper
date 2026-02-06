@@ -488,7 +488,7 @@ app.registerExtension({
                                     padding: "5px 5px",    // 这里保留你需要的文字上下边距
                                     cursor: "pointer",
                                     fontSize: "10px",
-                                    color: "#ddd",
+                                    color: "#bbb",
                                     whiteSpace: "pre-wrap",
                                     transition: "background 0.2s"
                                 },
@@ -507,7 +507,7 @@ app.registerExtension({
                                     background: "none",
                                     border: "none",
                                     cursor: "pointer",
-                                    fontSize: "16px",
+                                    fontSize: "14px",
                                     opacity: item.pinned ? 1 : 0.3
                                 },
                                 onclick: async (e) => {
@@ -527,13 +527,13 @@ app.registerExtension({
                                     background: "none",
                                     border: "none",
                                     cursor: "pointer",
-                                    fontSize: "16px",
+                                    fontSize: "14px",
                                     opacity: 0.6,
                                     // padding: "0 5px"
                                 },
                                 onclick: async (e) => {
                                     e.stopPropagation(); // 防止触发回填逻辑
-                                    if (confirm("Delete this entry?")) {
+                                    if (confirm("Delete entry "+item.content + " ?")) {
                                         const res = await api.fetchApi("/slowargo_api/delete_string_history", {
                                             method: "POST",
                                             body: JSON.stringify({ content: item.content, store_file })
