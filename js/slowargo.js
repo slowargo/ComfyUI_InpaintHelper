@@ -452,11 +452,7 @@ app.registerExtension({
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
                         const data = await response.json();
-                        if (data && data.entries) {
-                            entries = data.entries;
-                        } else {
-                            console.warn("[slowargo.js] get_string_history response missing 'entries'.");
-                        }
+                        entries = data.entries; // Directly assign as entries is guaranteed
                     } catch (error) {
                         console.error("[slowargo.js] Error fetching string history:", error);
                         alert("Error fetching history: " + error.message);
@@ -536,11 +532,7 @@ app.registerExtension({
                                             throw new Error(`HTTP error! status: ${res.status}`);
                                         }
                                         const nextData = await res.json();
-                                        if (nextData && nextData.entries) {
-                                            renderList(nextData.entries); // 局部刷新
-                                        } else {
-                                            console.warn("[slowargo.js] toggle_string_history_pin response missing 'entries'.");
-                                        }
+                                        renderList(nextData.entries); // 局部刷新，直接使用 nextData.entries
                                     } catch (error) {
                                         console.error("[slowargo.js] Error toggling pin status:", error);
                                         alert("Error toggling pin status: " + error.message);
@@ -570,11 +562,7 @@ app.registerExtension({
                                                 throw new Error(`HTTP error! status: ${res.status}`);
                                             }
                                             const nextData = await res.json();
-                                            if (nextData && nextData.entries) {
-                                                renderList(nextData.entries); // 刷新列表
-                                            } else {
-                                                console.warn("[slowargo.js] delete_string_history response missing 'entries'.");
-                                            }
+                                            renderList(nextData.entries); // 刷新列表，直接使用 nextData.entries
                                         } catch (error) {
                                             console.error("[slowargo.js] Error deleting history entry:", error);
                                             alert("Error deleting entry: " + error.message);
