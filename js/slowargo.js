@@ -533,10 +533,10 @@ app.registerExtension({
                                 },
                                 onclick: async (e) => {
                                     e.stopPropagation(); // 防止触发回填逻辑
-                                    if (confirm("Delete entry "+item.content + " ?")) {
+                                    if (confirm("Delete entry " + item.content + " ?")) {
                                         const res = await api.fetchApi("/slowargo_api/delete_string_history", {
                                             method: "POST",
-                                            body: JSON.stringify({ content: item.content, store_file })
+                                            body: JSON.stringify({content: item.content, store_file})
                                         });
                                         const nextData = await res.json();
                                         renderList(nextData.entries); // 刷新列表
@@ -560,16 +560,28 @@ app.registerExtension({
                     const handleEsc = (e) => {
                         if (e.key === "Escape") {
                             popup.close();
-                            // 移除监听，避免影响 ComfyUI 的其他组件
-                            window.removeEventListener("keydown", handleEsc);
                         }
                     };
-
                     window.addEventListener("keydown", handleEsc);
+
+                    // 点击对话框外部区域关闭
+                    const handleClickOutside = (e) => {
+                        // popup.element 是整个弹窗的容器，包含遮罩层和内容
+                        // 如果点击事件的目标不在 popup.element 内部，则关闭弹窗
+                        if (!popup.element.contains(e.target)) {
+                            popup.close();
+                        }
+                    };
+                    // 延迟添加监听器，避免本次点击立即关闭
+                    setTimeout(() => {
+                        window.addEventListener("click", handleClickOutside);
+                    }, 0);
+
                     // 修改 popup 的 close 方法，确保点击遮罩层关闭时也能移除监听
                     const originalClose = popup.close;
                     popup.close = () => {
                         window.removeEventListener("keydown", handleEsc);
+                        window.removeEventListener("click", handleClickOutside); // 移除点击外部监听
                         originalClose.apply(popup);
                     };
 
