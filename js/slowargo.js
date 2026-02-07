@@ -445,8 +445,22 @@ app.registerExtension({
                     const store_file = this.widgets.find(w => w.name === "store_file").value;
 
                     // 1. 请求后端获取数据
-                    const response = await api.fetchApi(`/slowargo_api/get_string_history?store_file=${encodeURIComponent(store_file)}`);
-                    let {entries} = await response.json();
+                    let entries = []; // Initialize entries outside try block
+                    try {
+                        const response = await api.fetchApi(`/slowargo_api/get_string_history?store_file=${encodeURIComponent(store_file)}`);
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        const data = await response.json();
+                        if (data && data.entries) {
+                            entries = data.entries;
+                        } else {
+                            console.warn("[slowargo.js] get_string_history response missing 'entries'.");
+                        }
+                    } catch (error) {
+                        console.error("[slowargo.js] Error fetching string history:", error);
+                        alert("Error fetching history: " + error.message);
+                    }
                     // console.log("[slowargo.js] get_string_history", entries);
 
                     // 2. 创建 Popup 内容
@@ -463,7 +477,8 @@ app.registerExtension({
                     });
 
                     const renderList = (data) => {
-                        content.innerHTML = "";
+                        content.innerHTML = ""; // Clear existing content
+                        const fragment = document.createDocumentFragment(); // Create a document fragment
                         data.forEach(item => {
                             const row = $el("div", {
                                 style: {
@@ -512,12 +527,24 @@ app.registerExtension({
                                 },
                                 onclick: async (e) => {
                                     e.stopPropagation();
-                                    const res = await api.fetchApi("/slowargo_api/toggle_string_history_pin", {
-                                        method: "POST",
-                                        body: JSON.stringify({content: item.content, store_file})
-                                    });
-                                    const nextData = await res.json();
-                                    renderList(nextData.entries); // 局部刷新
+                                    try {
+                                        const res = await api.fetchApi("/slowargo_api/toggle_string_history_pin", {
+                                            method: "POST",
+                                            body: JSON.stringify({content: item.content, store_file})
+                                        });
+                                        if (!res.ok) {
+                                            throw new Error(`HTTP error! status: ${res.status}`);
+                                        }
+                                        const nextData = await res.json();
+                                        if (nextData && nextData.entries) {
+                                            renderList(nextData.entries); // 局部刷新
+                                        } else {
+                                            console.warn("[slowargo.js] toggle_string_history_pin response missing 'entries'.");
+                                        }
+                                    } catch (error) {
+                                        console.error("[slowargo.js] Error toggling pin status:", error);
+                                        alert("Error toggling pin status: " + error.message);
+                                    }
                                 }
                             });
 
@@ -534,12 +561,24 @@ app.registerExtension({
                                 onclick: async (e) => {
                                     e.stopPropagation(); // 防止触发回填逻辑
                                     if (confirm("Delete entry " + item.content + " ?")) {
-                                        const res = await api.fetchApi("/slowargo_api/delete_string_history", {
-                                            method: "POST",
-                                            body: JSON.stringify({content: item.content, store_file})
-                                        });
-                                        const nextData = await res.json();
-                                        renderList(nextData.entries); // 刷新列表
+                                        try {
+                                            const res = await api.fetchApi("/slowargo_api/delete_string_history", {
+                                                method: "POST",
+                                                body: JSON.stringify({content: item.content, store_file})
+                                            });
+                                            if (!res.ok) {
+                                                throw new Error(`HTTP error! status: ${res.status}`);
+                                            }
+                                            const nextData = await res.json();
+                                            if (nextData && nextData.entries) {
+                                                renderList(nextData.entries); // 刷新列表
+                                            } else {
+                                                console.warn("[slowargo.js] delete_string_history response missing 'entries'.");
+                                            }
+                                        } catch (error) {
+                                            console.error("[slowargo.js] Error deleting history entry:", error);
+                                            alert("Error deleting entry: " + error.message);
+                                        }
                                     }
                                 }
                             });
@@ -547,8 +586,9 @@ app.registerExtension({
                             row.appendChild(text);
                             row.appendChild(pinBtn);
                             row.appendChild(deleteBtn);
-                            content.appendChild(row);
+                            fragment.appendChild(row); // Append to fragment instead of direct content
                         });
+                        content.appendChild(fragment); // Append fragment to content once
                     };
 
                     renderList(entries);
