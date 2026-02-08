@@ -728,23 +728,47 @@ app.registerExtension({
                 //        return
                 //     }
                 // }
-                const getBtn = () =>
-                  document.querySelector("#global-mask-editor button:has(i.pi-check)")
-
-                let btn = getBtn()
-                if (!btn) return
-
-                if (btn.disabled) {
-                    for (let i = 0; i < 20; i++) {
-                        await new Promise((r) => setTimeout(r, 100))
-                        btn = getBtn()
-                        if (!btn) return
-                        if (!btn.disabled) break
-                    }
+                // const getBtn = () =>
+                //   document.querySelector("#global-mask-editor button:has(i.pi-check)")
+                //
+                // // 等待 GPU 回读完成（drawEnd 中的异步操作）
+                // await new Promise((r) => setTimeout(r, 200))
+                //
+                // let btn = getBtn()
+                // if (!btn) return
+                //
+                // if (btn.disabled) {
+                //     for (let i = 0; i < 20; i++) {
+                //         await new Promise((r) => setTimeout(r, 100))
+                //         btn = getBtn()
+                //         if (!btn) return
+                //         if (!btn.disabled) break
+                //     }
+                // }
+                //
+                // if (btn && !btn.disabled) {
+                //     btn.click()
+                // }
+                // 等待 GPU 回读完成（drawEnd 会将 canvas opacity 从 '0' 恢复）
+                const canvases = document.querySelectorAll(
+                    "#maskEditorCanvasContainer canvas"
+                )
+                for (let i = 0; i < 50; i++) {
+                    if (![...canvases].some((c) => c.style.opacity === "0")) break
+                    await new Promise((r) => setTimeout(r, 100))
                 }
 
-                if (btn && !btn.disabled) {
-                    btn.click()
+                // 等待按钮可用并点击
+                for (let i = 0; i < 20; i++) {
+                    const btn = document.querySelector(
+                        "#global-mask-editor button:has(i.pi-check)"
+                    )
+                    if (!btn) return
+                    if (!btn.disabled) {
+                        btn.click()
+                        return
+                    }
+                    await new Promise((r) => setTimeout(r, 100))
                 }
             }
         },
