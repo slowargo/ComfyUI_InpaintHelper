@@ -713,9 +713,38 @@ app.registerExtension({
             id: "slowargo.js.extension.maskeditor.save",
             label: "Save Mask",
             function: async () => {
-                let btn = document.querySelectorAll("#global-mask-editor button i.pi-check")
-                if (btn.length > 0) {
-                    btn[0].click();
+                // let btn = document.querySelectorAll("#global-mask-editor button i.pi-check")
+                // if (btn.length > 0) {
+                //     btn[0].click();
+                // }
+                // 找 button 标签
+                // const buttons = document.querySelectorAll("#global-mask-editor button")
+                // for (const btn of buttons) {
+                //     if (btn.querySelector("i.pi-check")) {
+                //       // 检查是否 disabled
+                //        if (!btn.disabled) {
+                //             btn.click()
+                //        }
+                //        return
+                //     }
+                // }
+                const getBtn = () =>
+                  document.querySelector("#global-mask-editor button:has(i.pi-check)")
+
+                let btn = getBtn()
+                if (!btn) return
+
+                if (btn.disabled) {
+                    for (let i = 0; i < 20; i++) {
+                        await new Promise((r) => setTimeout(r, 100))
+                        btn = getBtn()
+                        if (!btn) return
+                        if (!btn.disabled) break
+                    }
+                }
+
+                if (btn && !btn.disabled) {
+                    btn.click()
                 }
             }
         },
