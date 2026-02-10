@@ -523,6 +523,33 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
             m.update(f.read())
         return m.digest().hex()
 
+class RefreshTriggerV1:
+    """A remote refresh trigger for LoadRecentImagePlusV1.
+    Connect the trigger input to any output of LoadRecentImagePlusV1,
+    then use the refresh button to trigger a refresh with custom watch_folders.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        default_watch_folders = "[10][output]; [5][input]; clipspace [6][input]"
+        return {
+            "required": {
+                "trigger": ("*", {"tooltip": "Connect to any output of Load Recent Image"}),
+            },
+            "optional": {
+                "watch_folders": ("STRING", {"default": default_watch_folders}),
+            }
+        }
+
+    RETURN_TYPES = ()
+    DESCRIPTION = "Remote refresh trigger for Load Recent Image node. Use the refresh button to trigger the connected Load Recent Image node's refresh with this node's watch_folders configuration."
+    FUNCTION = "execute"
+    CATEGORY = "Slowargo"
+    OUTPUT_NODE = True
+
+    def execute(self, trigger, watch_folders=""):
+        return {}
+
 class LoadImageFromAnyPath:
     @classmethod
     def INPUT_TYPES(cls):
@@ -907,34 +934,6 @@ class RememberStrings:
 
         # logger.info(f"[RememberStrings] file_path:{file_path}")
         return file_path, stored_entries
-
-class RefreshTriggerV1:
-    """A remote refresh trigger for LoadRecentImagePlusV1.
-    Connect the trigger input to any output of LoadRecentImagePlusV1,
-    then use the refresh button to trigger a refresh with custom watch_folders.
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        default_watch_folders = "[10][output]; [5][input]; clipspace [6][input]"
-        return {
-            "required": {
-                "trigger": ("*", {"tooltip": "Connect to any output of LoadRecentImagePlusV1"}),
-            },
-            "optional": {
-                "watch_folders": ("STRING", {"default": default_watch_folders}),
-            }
-        }
-
-    RETURN_TYPES = ()
-    DESCRIPTION = "Remote refresh trigger for LoadRecentImagePlusV1. Use the refresh button to trigger the connected LoadRecentImagePlusV1 node's refresh with this node's watch_folders configuration."
-    FUNCTION = "execute"
-    CATEGORY = "Slowargo"
-    OUTPUT_NODE = True
-
-    def execute(self, trigger, watch_folders=""):
-        return {}
-
 
 class RunButtonNode:
     def __init__(self):

@@ -341,12 +341,12 @@ app.registerExtension({
                 //     refreshWidget.hidden = true;
                 // }
 
-                const refreshFn = async function() {
+                const refreshFn = async function(customWatchFolders) {
                     try {
                         // console.log("[slowargo.js] LoadRecentImagePlusV1 refresh",this, node);
 
                         const options = {
-                            watch_folders: node.widgets.find(w => w.name === "watch_folders")?.value ?? "",
+                            watch_folders: customWatchFolders || node.widgets.find(w => w.name === "watch_folders")?.value || "",
                         };
 
                         const response = await api.fetchApi("/slowargo_api/refresh_previews_recent", {
@@ -382,8 +382,13 @@ app.registerExtension({
                     }
                 }
 
+                // Expose refreshFn for external use
+                node.refreshFn = refreshFn;
+
                 // In the refresh button callback
-                const refreshBtn = this.addWidget("button", "refresh", "", refreshFn);
+                const refreshBtn = this.addWidget("button", "refresh", "",  () => {
+                    this.refreshFn();
+                });
 
                 // Arrange widgets - move refresh button below watch_folders widget
                 if (refreshBtn) {
@@ -403,6 +408,59 @@ app.registerExtension({
 
                 return result;
             }
+        } else if (nodeType?.comfyClass === "RefreshTriggerV1") {
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+
+            nodeType.prototype.onNodeCreated = function() {
+                const node = this;
+                const result = origOnNodeCreated?.apply(this, arguments);
+
+                const refreshFn = async function() {
+                    try {
+                        // Find connected LoadRecentImagePlusV1 node via trigger input
+                        const triggerInput = node.inputs?.find(i => i.name === "trigger");
+                        if (!triggerInput || triggerInput.link == null) {
+                            console.warn("[RefreshTriggerV1] No connected node. Connect trigger to a LoadRecentImagePlusV1 output.");
+                            return;
+                        }
+
+                        const link = app.graph.links[triggerInput.link];
+                        if (!link) return;
+
+                        const targetNode = app.graph.getNodeById(link.origin_id);
+                        if (!targetNode || targetNode.comfyClass !== "LoadRecentImagePlusV1") {
+                            console.warn("[RefreshTriggerV1] Connected node is not LoadRecentImagePlusV1, got:", targetNode?.comfyClass);
+                            return;
+                        }
+
+                        // Use this node's watch_folders value and call target's refreshFn
+                        const watchFolders = node.widgets.find(w => w.name === "watch_folders")?.value ?? "";
+                        await targetNode.refreshFn?.(watchFolders);
+
+                    } catch (e) {
+                        console.error("[RefreshTriggerV1] Error refreshing:", e);
+                    }
+                };
+
+                const refreshBtn = this.addWidget("button", "refresh", "", refreshFn);
+
+                // Arrange widgets - move refresh button below watch_folders widget
+                if (refreshBtn) {
+                    const targetWidget = this.widgets?.find(w => w.name === "watch_folders");
+                    const widgets = this.widgets.splice(-1);
+                    this.widgets.splice(targetWidget ? this.widgets.indexOf(targetWidget) + 1 : 0, 0, ...widgets);
+                }
+
+                this.handleAction = async function(action) {
+                    if (action === "Refresh") {
+                        await refreshFn();
+                    }
+                };
+
+                this.constructor.exposedActions = ["Refresh"];
+
+                return result;
+            };
         } else if (nodeType?.comfyClass == "RunButtonNode") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -616,79 +674,9 @@ app.registerExtension({
                     popup.show(content);
                 }
             }
-        } else if (nodeType?.comfyClass === "RefreshTriggerV1") {
-            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
-
-            nodeType.prototype.onNodeCreated = function() {
-                const node = this;
-                const result = origOnNodeCreated?.apply(this, arguments);
-
-                const refreshFn = async function() {
-                    try {
-                        // Find connected LoadRecentImagePlusV1 node via trigger input
-                        const triggerInput = node.inputs?.find(i => i.name === "trigger");
-                        if (!triggerInput || triggerInput.link == null) {
-                            console.warn("[RefreshTriggerV1] No connected node. Connect trigger to a LoadRecentImagePlusV1 output.");
-                            return;
-                        }
-
-                        const link = app.graph.links[triggerInput.link];
-                        if (!link) return;
-
-                        const targetNode = app.graph.getNodeById(link.origin_id);
-                        if (!targetNode || targetNode.comfyClass !== "LoadRecentImagePlusV1") {
-                            console.warn("[RefreshTriggerV1] Connected node is not LoadRecentImagePlusV1, got:", targetNode?.comfyClass);
-                            return;
-                        }
-
-                        // Use this node's watch_folders value
-                        const watchFolders = node.widgets.find(w => w.name === "watch_folders")?.value ?? "";
-
-                        const response = await api.fetchApi("/slowargo_api/refresh_previews_recent", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ watch_folders: watchFolders })
-                        });
-
-                        if (!response.ok) throw new Error(await response.text());
-                        const result = await response.json();
-                        if (!result.success) throw new Error(result.error);
-
-                        // Update the connected LoadRecentImagePlusV1's image widget
-                        const imageWidget = targetNode.widgets?.find(w => w.name === "image");
-                        if (imageWidget && result.image_name?.length) {
-                            imageWidget.options.values = result.image_name;
-                            imageWidget.value = result.image_name[0];
-                            imageWidget.callback?.call(imageWidget);
-                        }
-
-                    } catch (e) {
-                        console.error("[RefreshTriggerV1] Error refreshing:", e);
-                    }
-                };
-
-                const refreshBtn = this.addWidget("button", "refresh", "", refreshFn);
-
-                // Arrange widgets - move refresh button below watch_folders widget
-                if (refreshBtn) {
-                    const targetWidget = this.widgets?.find(w => w.name === "watch_folders");
-                    const widgets = this.widgets.splice(-1);
-                    this.widgets.splice(targetWidget ? this.widgets.indexOf(targetWidget) + 1 : 0, 0, ...widgets);
-                }
-
-                this.handleAction = async function(action) {
-                    if (action === "Refresh") {
-                        await refreshFn();
-                    }
-                };
-
-                this.constructor.exposedActions = ["Refresh"];
-
-                return result;
-            };
         }
 
-        console.log("[slowargo.js] init done", nodeType?.comfyClass)
+        // console.log("[slowargo.js] init done", nodeType?.comfyClass)
     },
     // async afterConfigureGraph(graph) {
     //     console.log("[slowargo.js] afterConfigureGraph", graph)
