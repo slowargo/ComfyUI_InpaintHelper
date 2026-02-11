@@ -277,6 +277,36 @@ function addTurboToggleButton() {
         return;
     }
 
+    // Create Reload Mask button
+    const reloadBtn = document.createElement("button");
+    reloadBtn.className = "reload-mask-button";
+    reloadBtn.title = "Reload Mask (Ctrl+L): Load most recent clipspace content";
+    const reloadIcon = document.createElement("i");
+    reloadIcon.className = "pi pi-refresh";
+    reloadBtn.appendChild(reloadIcon);
+    const reloadText = document.createElement("span");
+    reloadText.textContent = "Reload Mask";
+    reloadBtn.appendChild(reloadText);
+    reloadBtn.style.cssText = `
+        background: #6c757d;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 6px 12px;
+        margin-right: 8px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: bold;
+        transition: opacity 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    `;
+
+    reloadBtn.addEventListener("click", async () => {
+        await loadClipspaceToEditor();
+    });
+
     // Create toggle button
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "turbo-mode-toggle";
@@ -324,13 +354,13 @@ function addTurboToggleButton() {
 
     // Insert before undo button
     //refBtn.parentNode.insertBefore(toggleBtn, refBtn);
+    refBtn.parentNode.appendChild(reloadBtn);
     refBtn.parentNode.appendChild(toggleBtn);
 
     updateToggleStyle();
 }
 
 // === Turbo Mode Initialization ===
-
 export function initTurboMode() {
     // Sync Turbo Mode with CapsLock state (CapsLock ON = Turbo ON, OFF = Turbo OFF)
     window.addEventListener('keydown', async function(e) {
@@ -356,6 +386,7 @@ export function initTurboMode() {
         //     console.log("[slowargo.js] Turbo Mode:", turboState.enabled ? "enabled" : "disabled");
         // }
 
+        if (!targetNode) return;
 
         // Ctrl+L loads clipspace content into current editor
         if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
@@ -365,11 +396,11 @@ export function initTurboMode() {
             await loadClipspaceToEditor();
             return;
         }
+
         // Enter executes turbo cycle if enabled and mask is not empty
         if (e.key !== 'Enter') return;
         if (!turboState.enabled) return;
         if (turboState.active) return;
-        if (!targetNode) return;
 
         if (!isMaskNonEmpty()) {
             console.log("[slowargo.js] Turbo Mode: mask is empty, skipping");
