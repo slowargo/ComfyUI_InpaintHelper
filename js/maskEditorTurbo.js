@@ -148,17 +148,12 @@ async function executeTurboCycle(targetNode) {
         console.log("[slowargo.js] Turbo Mode: Refreshing image...");
         const node = app.graph.getNodeById(targetNode.id);
         if (!node || !node.refreshImageList) {
-            console.warn("[slowargo.js] Turbo Mode: target node lost or no refreshFn");
+            console.warn("[slowargo.js] Turbo Mode: target node lost or no refreshImageList");
             return;
         }
-        await node.refreshImageList();
 
-        await sleep(300);
-
-        console.log("[slowargo.js] Turbo Mode: Opening editor...");
-        ComfyApp.clipspace_return_node = node;
         turboState.sourceNodeId = node.id;
-        ComfyApp.open_maskeditor?.();
+        await node.refreshImageList(null, true);
 
         // MutationObserver will automatically call restoreColorAndAddToggle when editor opens
         console.log("[slowargo.js] Turbo Mode: cycle complete");

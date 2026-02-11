@@ -345,7 +345,7 @@ app.registerExtension({
                 //     refreshWidget.hidden = true;
                 // }
 
-                const refreshFn = async function(customWatchFolders) {
+                const refreshFn = async function(customWatchFolders, forceOpenEditor) {
                     try {
                         // console.log("[slowargo.js] LoadRecentImagePlusV1 refresh",this, node);
 
@@ -375,8 +375,8 @@ app.registerExtension({
                             imageWidget.callback.call(imageWidget);
                         }
 
-                        // Hold shift and click refresh will open the mask editor after refreshing
-                        if (app.shiftDown) {
+                        // Open mask editor after refreshing if forceOpenEditor is true, or when shift-clicking the refresh button
+                        if (forceOpenEditor || app.shiftDown) {
                             ComfyApp.clipspace_return_node = node;
                             ComfyApp.open_maskeditor?.();
                         }
