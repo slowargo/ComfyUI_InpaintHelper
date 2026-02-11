@@ -131,7 +131,12 @@ async function executeTurboCycle(targetNode) {
         console.log("[slowargo.js] Turbo Mode: Saving mask...");
         await performMaskSave();
 
-        await sleep(300);
+        // Wait for editor to close completely
+        console.log("[slowargo.js] Turbo Mode: Waiting for editor to close...");
+        for (let i = 0; i < 50; i++) {
+            if (!ComfyApp.maskeditor_is_opended()) break;
+            await sleep(100);
+        }
 
         console.log("[slowargo.js] Turbo Mode: Executing workflow...");
         app.queuePrompt(0);
@@ -155,10 +160,7 @@ async function executeTurboCycle(targetNode) {
         turboState.sourceNodeId = node.id;
         ComfyApp.open_maskeditor?.();
 
-        // Restore color and add toggle button after editor opens
-        await sleep(500);
-        restoreColorAndAddToggle();
-
+        // MutationObserver will automatically call restoreColorAndAddToggle when editor opens
         console.log("[slowargo.js] Turbo Mode: cycle complete");
 
     } catch (error) {
@@ -207,7 +209,8 @@ function addTurboToggleButton() {
     // Create toggle button
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "turbo-mode-toggle";
-    toggleBtn.title = "Turbo Mode: Press Enter to save and run prompt, and auto refresh after completion\n(CapsLock to toggle)";
+    // toggleBtn.title = "Turbo Mode: Press Enter to save and run prompt, and auto refresh after completion\n(CapsLock to toggle)";
+    toggleBtn.title = "Turbo Mode: Press Enter to save and run prompt, and auto refresh after completion";
     const icon = document.createElement("i");
     icon.className = "pi pi-fast-forward";
     toggleBtn.appendChild(icon);
@@ -262,25 +265,25 @@ export function initTurboMode() {
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
 
-        const capsLockOn = e.getModifierState('CapsLock');
+        // const capsLockOn = e.getModifierState('CapsLock');
         const targetNode = getTurboTargetNode();
 
         // Sync CapsLock state with Turbo Mode enabled state
-        if (capsLockOn !== turboState.enabled && targetNode) {
-            turboState.enabled = capsLockOn;
-            const toggleBtn = document.querySelector(".turbo-mode-toggle");
-            if (toggleBtn) {
-                const style = toggleBtn.style;
-                if (turboState.enabled) {
-                    style.opacity = "1";
-                    style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
-                } else {
-                    style.opacity = "0.6";
-                    style.boxShadow = "none";
-                }
-            }
-            console.log("[slowargo.js] Turbo Mode:", turboState.enabled ? "enabled" : "disabled");
-        }
+        // if (capsLockOn !== turboState.enabled && targetNode) {
+        //     turboState.enabled = capsLockOn;
+        //     const toggleBtn = document.querySelector(".turbo-mode-toggle");
+        //     if (toggleBtn) {
+        //         const style = toggleBtn.style;
+        //         if (turboState.enabled) {
+        //             style.opacity = "1";
+        //             style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
+        //         } else {
+        //             style.opacity = "0.6";
+        //             style.boxShadow = "none";
+        //         }
+        //     }
+        //     console.log("[slowargo.js] Turbo Mode:", turboState.enabled ? "enabled" : "disabled");
+        // }
 
         // Enter executes turbo cycle if enabled and mask is not empty
         if (e.key !== 'Enter') return;
