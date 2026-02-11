@@ -251,6 +251,7 @@ function addTurboToggleButton() {
     // Insert before undo button
     //refBtn.parentNode.insertBefore(toggleBtn, refBtn);
     refBtn.parentNode.appendChild(toggleBtn);
+
     updateToggleStyle();
 }
 
@@ -301,12 +302,14 @@ export function initTurboMode() {
 
     // Monitor mask editor container to detect opening (handles all open methods)
     const observer = new MutationObserver(() => {
-        const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
-        if (maskEditorPanel && !document.querySelector(".turbo-mode-toggle")) {
+        //const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
+        const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
+        if (refBtn && !document.querySelector(".turbo-mode-toggle")) {
             // Mask editor just opened, add toggle and restore color
-            setTimeout(() => {
-                restoreColorAndAddToggle();
-            }, 100);
+            // setTimeout(() => {
+            //     restoreColorAndAddToggle();
+            // }, 100);
+            restoreColorAndAddToggle();
         }
     });
 

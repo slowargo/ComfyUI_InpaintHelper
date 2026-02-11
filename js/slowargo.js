@@ -2,7 +2,7 @@ import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
-import { initTurboMode, performMaskSave } from "./turboMode.js";
+import { initTurboMode, performMaskSave } from "./maskEditorTurbo.js";
 
 app.registerExtension({
     name: "slowargo.js.extension",
