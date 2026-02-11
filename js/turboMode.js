@@ -125,11 +125,11 @@ async function executeTurboCycle(targetNode) {
 
         console.log("[slowargo.js] Turbo: Refreshing image...");
         const node = app.graph.getNodeById(turboState.sourceNodeId);
-        if (!node || !node.refreshFn) {
+        if (!node || !node.refreshImageList) {
             console.warn("[slowargo.js] Turbo Mode: target node lost or no refreshFn");
             return;
         }
-        await node.refreshFn();
+        await node.refreshImageList();
 
         await sleep(300);
 

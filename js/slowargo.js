@@ -387,11 +387,11 @@ app.registerExtension({
                 }
 
                 // Expose refreshFn for external use
-                node.refreshFn = refreshFn;
+                node.refreshImageList = refreshFn;
 
                 // In the refresh button callback
                 const refreshBtn = this.addWidget("button", "refresh", "",  () => {
-                    this.refreshFn();
+                    refreshFn();
                 });
 
                 // Arrange widgets - move refresh button below watch_folders widget
@@ -439,7 +439,7 @@ app.registerExtension({
 
                         // Use this node's watch_folders value and call target's refreshFn
                         const watchFolders = node.widgets.find(w => w.name === "watch_folders")?.value ?? "";
-                        await targetNode.refreshFn?.(watchFolders);
+                        await targetNode.refreshImageList?.(watchFolders);
 
                     } catch (e) {
                         console.error("[RefreshTriggerV1] Error refreshing:", e);
