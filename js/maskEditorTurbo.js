@@ -65,11 +65,13 @@ async function loadClipspaceToEditor() {
         const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
         baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
         baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
+        baseImg.src = '';
 
         // Draw and invert mask
         const maskCtx = canvases[2].getContext('2d', {willReadFrequently: true});
         maskCtx.clearRect(0, 0, canvases[2].width, canvases[2].height);
         maskCtx.drawImage(maskImg, 0, 0, canvases[2].width, canvases[2].height);
+        maskImg.src = '';
 
         const maskData = maskCtx.getImageData(0, 0, canvases[2].width, canvases[2].height);
         for (let i = 3; i < maskData.data.length; i += 4) {
@@ -83,6 +85,7 @@ async function loadClipspaceToEditor() {
             const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
             paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
             paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
+            paintImg.src = '';
         } catch (e) {
             // Paint layer is optional
         }

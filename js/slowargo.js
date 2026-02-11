@@ -860,6 +860,11 @@ function updateNodePreview(node, imageName) {
     console.log("[slowargo.js] updateNodePreview", imageName, subfolder, filename);
     imageName = filename;
 
+    // Release old image if exists
+    if (node.imgs?.[0]?.src) {
+        node.imgs[0].src = '';
+    }
+
     const img = new Image();
     img.onload = () => {
         node.imgs = [img];
