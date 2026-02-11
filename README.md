@@ -48,6 +48,7 @@ A collection of utility nodes for ComfyUI that enhance inpainting workflows.
   - **Switch to Mask**: Switch to the mask tool in the Mask Editor
   - **Switch to Eye Dropper**: Switch to the brush tool in the Mask Editor and activate the eye dropper color picker
   - **Save Mask**: Save the mask and exit in the Mask Editor
+  - **Load Clipspace (Ctrl+L)**: In the Mask Editor, press Ctrl+L (Cmd+L on Mac) to load the most recent clipspace content (base image, mask, and paint layers) into the current editing canvas. Useful for reusing previous mask editing results.
 - Selected node's toolbox buttons
   - **Open Image**: Adds an open image button, with the same effect as the shortcut and right-click menu
 - Other improvements

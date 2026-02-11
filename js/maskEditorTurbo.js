@@ -20,6 +20,117 @@ const colorMemory = {
     }
 };
 
+// === Load Clipspace Content to Current Editor ===
+async function loadClipspaceToEditor() {
+    try {
+        // Get recent clipspace files using existing API
+        const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({watch_folders: 'clipspace [6][input]'})
+        });
+
+        if (!response.ok) {
+            console.warn("[slowargo.js] Failed to fetch clipspace files");
+            return;
+        }
+
+        const data = await response.json();
+        if (!data.image_name || data.image_name.length === 0) {
+            console.warn("[slowargo.js] No clipspace files found");
+            return;
+        }
+
+        // Get the most recent file (first in the list)
+        const latestFile = data.image_name[0];
+        const match = latestFile.match(/clipspace-painted-masked-(\d+)\.png/);
+        if (!match) {
+            console.warn("[slowargo.js] Invalid clipspace filename format");
+            return;
+        }
+
+        const timestamp = match[1];
+        const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
+
+        // Construct URLs for all layers
+        const baseUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`);
+        const maskUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`);
+        const paintUrl = api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`);
+
+        console.log("[slowargo.js] Loading clipspace content, timestamp:", timestamp);
+
+        // Get all canvases
+        const canvases = document.querySelectorAll("#maskEditorCanvasContainer canvas");
+        if (canvases.length < 3) {
+            console.warn("[slowargo.js] Not enough canvases found");
+            return;
+        }
+
+        const baseCanvas = canvases[0];
+        const paintCanvas = canvases[1];
+        const maskCanvas = canvases[2];
+
+        // Load base image
+        const baseImg = new Image();
+        baseImg.crossOrigin = 'anonymous';
+        await new Promise((resolve, reject) => {
+            baseImg.onload = resolve;
+            baseImg.onerror = reject;
+            baseImg.src = baseUrl;
+        });
+
+        const baseCtx = baseCanvas.getContext('2d', {willReadFrequently: true});
+        if (baseCtx) {
+            baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+            baseCtx.drawImage(baseImg, 0, 0, baseCanvas.width, baseCanvas.height);
+        }
+
+        // Load mask
+        const maskImg = new Image();
+        maskImg.crossOrigin = 'anonymous';
+        await new Promise((resolve, reject) => {
+            maskImg.onload = resolve;
+            maskImg.onerror = reject;
+            maskImg.src = maskUrl;
+        });
+
+        const maskCtx = maskCanvas.getContext('2d', {willReadFrequently: true});
+        if (maskCtx) {
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            maskCtx.drawImage(maskImg, 0, 0, maskCanvas.width, maskCanvas.height);
+        }
+
+        // Invert mask alpha (ComfyUI mask format)
+        const maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+        for (let i = 0; i < maskData.data.length; i += 4) {
+            maskData.data[i + 3] = 255 - maskData.data[i + 3];
+        }
+        maskCtx.putImageData(maskData, 0, 0);
+
+        // Load paint layer
+        try {
+            const paintImg = new Image();
+            paintImg.crossOrigin = 'anonymous';
+            await new Promise((resolve, reject) => {
+                paintImg.onload = resolve;
+                paintImg.onerror = reject;
+                paintImg.src = paintUrl;
+            });
+
+            const paintCtx = paintCanvas.getContext('2d', {willReadFrequently: true});
+            if (paintCtx) {
+                paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+                paintCtx.drawImage(paintImg, 0, 0, paintCanvas.width, paintCanvas.height);
+            }
+        } catch (error) {
+            console.log("[slowargo.js] Paint layer not found");
+        }
+
+        console.log("[slowargo.js] Clipspace content loaded successfully");
+    } catch (error) {
+        console.error("[slowargo.js] Failed to load clipspace content:", error);
+    }
+}
 // === Turbo Mode Helper Functions ===
 
 function sleep(ms) {
@@ -280,6 +391,15 @@ export function initTurboMode() {
         //     console.log("[slowargo.js] Turbo Mode:", turboState.enabled ? "enabled" : "disabled");
         // }
 
+
+        // Ctrl+L loads clipspace content into current editor
+        if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            console.log("[slowargo.js] Loading clipspace content...");
+            await loadClipspaceToEditor();
+            return;
+        }
         // Enter executes turbo cycle if enabled and mask is not empty
         if (e.key !== 'Enter') return;
         if (!turboState.enabled) return;

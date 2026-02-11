@@ -61,6 +61,7 @@
   - **Switch to Mask**: 在 Mask Editor 中切换到 mask 工具
   - **Switch to Eye Dropper**: 在 Mask Editor 中切换到画笔工具并激活 eye dropper 拾色
   - **Save Mask**: 在 Mask Editor 中保存 mask 并退出
+  - **Load Clipspace (Ctrl+L)**: 在 Mask Editor 中按 Ctrl+L (Mac 上为 Cmd+L) 可将最近的 clipspace 内容（底图、mask 和 paint 图层）加载到当前编辑画布。方便复用之前的 mask 编辑结果。
 - 选中节点的 toolbox 按键
   - **Open Image**: 增加一个打开图片的按键，跟快捷键和右键菜单效果一样
 - 其他完善
