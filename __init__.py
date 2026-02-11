@@ -2,15 +2,13 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-from typing_extensions import override
+from typing import List, Tuple
 
 from PIL import Image, ImageOps, ImageSequence
 from PIL.PngImagePlugin import PngInfo
 from aiohttp import web
 from comfy.cli_args import args
-from comfy_api.latest import ComfyExtension, io
+from comfy_api.latest import io
 import folder_paths
 import node_helpers
 import nodes
