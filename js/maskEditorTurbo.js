@@ -23,112 +23,73 @@ const colorMemory = {
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor() {
     try {
-        // Get recent clipspace files using existing API
         const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({watch_folders: 'clipspace [6][input]'})
+            body: JSON.stringify({watch_folders: 'clipspace [1][input]'})
         });
 
-        if (!response.ok) {
-            console.warn("[slowargo.js] Failed to fetch clipspace files");
-            return;
-        }
-
         const data = await response.json();
-        if (!data.image_name || data.image_name.length === 0) {
+        if (!data.image_name?.[0]) {
             console.warn("[slowargo.js] No clipspace files found");
             return;
         }
 
-        // Get the most recent file (first in the list)
-        const latestFile = data.image_name[0];
-        const match = latestFile.match(/clipspace-painted-masked-(\d+)\.png/);
-        if (!match) {
-            console.warn("[slowargo.js] Invalid clipspace filename format");
+        const timestamp = data.image_name[0].match(/clipspace-painted-masked-(\d+)\.png/)?.[1];
+        if (!timestamp) {
+            console.warn("[slowargo.js] Invalid clipspace filename");
             return;
         }
 
-        const timestamp = match[1];
-        const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
-
-        // Construct URLs for all layers
-        const baseUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`);
-        const maskUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`);
-        const paintUrl = api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`);
-
-        console.log("[slowargo.js] Loading clipspace content, timestamp:", timestamp);
-
-        // Get all canvases
         const canvases = document.querySelectorAll("#maskEditorCanvasContainer canvas");
-        if (canvases.length < 3) {
-            console.warn("[slowargo.js] Not enough canvases found");
-            return;
-        }
+        if (canvases.length < 3) return;
 
-        const baseCanvas = canvases[0];
-        const paintCanvas = canvases[1];
-        const maskCanvas = canvases[2];
+        console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp);
 
-        // Load base image
-        const baseImg = new Image();
-        baseImg.crossOrigin = 'anonymous';
-        await new Promise((resolve, reject) => {
-            baseImg.onload = resolve;
-            baseImg.onerror = reject;
-            baseImg.src = baseUrl;
+        const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
+        const loadImg = (url) => new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = url;
         });
 
-        const baseCtx = baseCanvas.getContext('2d', {willReadFrequently: true});
-        if (baseCtx) {
-            baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
-            baseCtx.drawImage(baseImg, 0, 0, baseCanvas.width, baseCanvas.height);
-        }
+        // Load base and mask in parallel
+        const [baseImg, maskImg] = await Promise.all([
+            loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`)),
+            loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`))
+        ]);
 
-        // Load mask
-        const maskImg = new Image();
-        maskImg.crossOrigin = 'anonymous';
-        await new Promise((resolve, reject) => {
-            maskImg.onload = resolve;
-            maskImg.onerror = reject;
-            maskImg.src = maskUrl;
-        });
+        // Draw base
+        const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
+        baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
+        baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
 
-        const maskCtx = maskCanvas.getContext('2d', {willReadFrequently: true});
-        if (maskCtx) {
-            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
-            maskCtx.drawImage(maskImg, 0, 0, maskCanvas.width, maskCanvas.height);
-        }
+        // Draw and invert mask
+        const maskCtx = canvases[2].getContext('2d', {willReadFrequently: true});
+        maskCtx.clearRect(0, 0, canvases[2].width, canvases[2].height);
+        maskCtx.drawImage(maskImg, 0, 0, canvases[2].width, canvases[2].height);
 
-        // Invert mask alpha (ComfyUI mask format)
-        const maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-        for (let i = 0; i < maskData.data.length; i += 4) {
-            maskData.data[i + 3] = 255 - maskData.data[i + 3];
+        const maskData = maskCtx.getImageData(0, 0, canvases[2].width, canvases[2].height);
+        for (let i = 3; i < maskData.data.length; i += 4) {
+            maskData.data[i] = 255 - maskData.data[i];
         }
         maskCtx.putImageData(maskData, 0, 0);
 
-        // Load paint layer
+        // Load paint layer (optional)
         try {
-            const paintImg = new Image();
-            paintImg.crossOrigin = 'anonymous';
-            await new Promise((resolve, reject) => {
-                paintImg.onload = resolve;
-                paintImg.onerror = reject;
-                paintImg.src = paintUrl;
-            });
-
-            const paintCtx = paintCanvas.getContext('2d', {willReadFrequently: true});
-            if (paintCtx) {
-                paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
-                paintCtx.drawImage(paintImg, 0, 0, paintCanvas.width, paintCanvas.height);
-            }
-        } catch (error) {
-            console.log("[slowargo.js] Paint layer not found");
+            const paintImg = await loadImg(api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`));
+            const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
+            paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
+            paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
+        } catch (e) {
+            // Paint layer is optional
         }
 
-        console.log("[slowargo.js] Clipspace content loaded successfully");
+        console.log("[slowargo.js] Clipspace loaded successfully");
     } catch (error) {
-        console.error("[slowargo.js] Failed to load clipspace content:", error);
+        console.error("[slowargo.js] Failed to load clipspace:", error);
     }
 }
 // === Turbo Mode Helper Functions ===
@@ -145,7 +106,8 @@ function getTurboTargetNode() {
     const selectedNodes = app.canvas.selected_nodes;
     if (selectedNodes && Object.keys(selectedNodes).length === 1) {
         selectedNode = Object.values(selectedNodes)[0];
-        console.log("[slowargo.js] Turbo: using selected node from canvas");
+    } else {
+        console.log("[slowargo.js] Turbo mode: using clipspace_return_node from canvas");
     }
 
     if (selectedNode?.comfyClass !== "LoadRecentImagePlusV1") {
