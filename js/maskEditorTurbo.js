@@ -2,6 +2,12 @@ import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// Load CSS dynamically
+const link = document.createElement("link");
+link.rel = "stylesheet";
+link.href = new URL("./maskEditorTurbo.css", import.meta.url).href;
+document.head.appendChild(link);
+
 // === Fast Forward Mode State ===
 const fastForwardState = {
     active: false,         // 防止重入
@@ -287,21 +293,6 @@ function addFastForwardToggleButton() {
     const reloadText = document.createElement("span");
     reloadText.textContent = "Reload Mask";
     reloadBtn.appendChild(reloadText);
-    reloadBtn.style.cssText = `
-        background: rgba(30, 144, 255, 0.8);
-        color: white;
-        border: none;
-        border-radius: 4px;
-        padding: 6px 12px;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: bold;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        hover: background rgba(30, 144, 255, 1);
-    `;
 
     reloadBtn.addEventListener("click", async () => {
         await loadClipspaceToEditor();
@@ -310,7 +301,6 @@ function addFastForwardToggleButton() {
     // Create toggle button
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "fast-forward-mode-toggle";
-    // toggleBtn.title = "Fast Forward Mode: Press Enter to save and run prompt, and auto refresh after completion\n(CapsLock to toggle)";
     toggleBtn.title = "Fast Forward Mode: Press Enter to save and run prompt, and auto refresh after completion";
     const icon = document.createElement("i");
     icon.className = "pi pi-fast-forward";
@@ -318,29 +308,15 @@ function addFastForwardToggleButton() {
     const text = document.createElement("span");
     text.textContent = "FF";
     toggleBtn.appendChild(text);
-    toggleBtn.style.cssText = `
-        background: rgba(30, 144, 255, 0.5);
-        color: white;
-        border: none;
-        border-radius: 4px;
-        padding: 6px 12px;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: bold;
-        transition: all 0.2s;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    `;
 
     // Update style based on enabled state
     function updateToggleStyle() {
         if (fastForwardState.enabled) {
-            toggleBtn.style.background = "rgba(30, 144, 255, 0.9)";
-            toggleBtn.style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
+            toggleBtn.classList.add("enabled");
+            toggleBtn.classList.remove("disabled");
         } else {
-            toggleBtn.style.background = "rgba(30, 144, 255, 0.4)";
-            toggleBtn.style.boxShadow = "none";
+            toggleBtn.classList.add("disabled");
+            toggleBtn.classList.remove("enabled");
         }
     }
 
@@ -358,21 +334,7 @@ function addFastForwardToggleButton() {
 
         const canvasContainer = document.querySelector("#maskEditorCanvasContainer");
         if (canvasContainer && canvasContainer.parentNode) {
-            canvasContainer.parentNode.style.position = "relative";
-
-            buttonContainer.style.cssText = `
-                position: absolute;
-                top: 10px;
-                left: 74px;
-                display: flex;
-                gap: 8px;
-                z-index: 100;
-                background: rgba(0, 0, 0, 0.3);
-                padding: 8px;
-                border-radius: 6px;
-                pointer-events: auto;
-            `;
-
+            canvasContainer.parentNode.classList.add("ff-mode-canvas-container-parent");
             canvasContainer.parentNode.insertBefore(buttonContainer, canvasContainer);
         }
     }
