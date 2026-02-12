@@ -288,19 +288,19 @@ function addFastForwardToggleButton() {
     reloadText.textContent = "Reload Mask";
     reloadBtn.appendChild(reloadText);
     reloadBtn.style.cssText = `
-        background: #1e90ff;
+        background: rgba(30, 144, 255, 0.8);
         color: white;
         border: none;
         border-radius: 4px;
         padding: 6px 12px;
-        margin-right: 8px;
         cursor: pointer;
         font-size: 12px;
         font-weight: bold;
-        transition: opacity 0.2s;
+        transition: all 0.2s;
         display: flex;
         align-items: center;
         gap: 4px;
+        hover: background rgba(30, 144, 255, 1);
     `;
 
     reloadBtn.addEventListener("click", async () => {
@@ -319,17 +319,15 @@ function addFastForwardToggleButton() {
     text.textContent = "FF";
     toggleBtn.appendChild(text);
     toggleBtn.style.cssText = `
-        background: #1e90ff;
+        background: rgba(30, 144, 255, 0.5);
         color: white;
         border: none;
         border-radius: 4px;
         padding: 6px 12px;
-        margin-right: 8px;
         cursor: pointer;
         font-size: 12px;
         font-weight: bold;
-        opacity: 0.6;
-        transition: opacity 0.2s;
+        transition: all 0.2s;
         display: flex;
         align-items: center;
         gap: 4px;
@@ -338,10 +336,10 @@ function addFastForwardToggleButton() {
     // Update style based on enabled state
     function updateToggleStyle() {
         if (fastForwardState.enabled) {
-            toggleBtn.style.opacity = "1";
+            toggleBtn.style.background = "rgba(30, 144, 255, 0.9)";
             toggleBtn.style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
         } else {
-            toggleBtn.style.opacity = "0.6";
+            toggleBtn.style.background = "rgba(30, 144, 255, 0.4)";
             toggleBtn.style.boxShadow = "none";
         }
     }
@@ -352,10 +350,35 @@ function addFastForwardToggleButton() {
         console.log("[slowargo.js] Fast Forward Mode:", fastForwardState.enabled ? "enabled" : "disabled");
     });
 
-    // Insert before undo button
-    //refBtn.parentNode.insertBefore(toggleBtn, refBtn);
-    refBtn.parentNode.appendChild(reloadBtn);
-    refBtn.parentNode.appendChild(toggleBtn);
+    // Create a container for buttons at top-left of canvas (avoiding sidebar)
+    let buttonContainer = document.querySelector(".ff-mode-button-container");
+    if (!buttonContainer) {
+        buttonContainer = document.createElement("div");
+        buttonContainer.className = "ff-mode-button-container";
+
+        const canvasContainer = document.querySelector("#maskEditorCanvasContainer");
+        if (canvasContainer && canvasContainer.parentNode) {
+            canvasContainer.parentNode.style.position = "relative";
+
+            buttonContainer.style.cssText = `
+                position: absolute;
+                top: 10px;
+                left: 74px;
+                display: flex;
+                gap: 8px;
+                z-index: 100;
+                background: rgba(0, 0, 0, 0.3);
+                padding: 8px;
+                border-radius: 6px;
+                pointer-events: auto;
+            `;
+
+            canvasContainer.parentNode.insertBefore(buttonContainer, canvasContainer);
+        }
+    }
+
+    buttonContainer.appendChild(toggleBtn);
+    buttonContainer.appendChild(reloadBtn);
 
     updateToggleStyle();
 }
