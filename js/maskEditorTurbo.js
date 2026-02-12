@@ -5,7 +5,7 @@ import { api } from "../../scripts/api.js";
 // === Turbo Mode State ===
 const turboState = {
     active: false,         // 防止重入
-    enabled: false,        // Turbo Mode 是否启用（通过 toggle 控制）
+    enabled: true,        // Turbo Mode 是否启用（通过 toggle 控制）
     sourceNodeId: null,    // 发起 turbo 的节点 ID
 };
 
@@ -288,7 +288,7 @@ function addTurboToggleButton() {
     reloadText.textContent = "Reload Mask";
     reloadBtn.appendChild(reloadText);
     reloadBtn.style.cssText = `
-        background: #6c757d;
+        background: #1e90ff;
         color: white;
         border: none;
         border-radius: 4px;
