@@ -2,7 +2,7 @@ import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
-import { initTurboMode, performMaskSave } from "./maskEditorTurbo.js";
+import { initFastForwardMode, performMaskSave } from "./maskEditorTurbo.js";
 
 app.registerExtension({
     name: "slowargo.js.extension",
@@ -28,8 +28,8 @@ app.registerExtension({
             }
         }, true); // true to ensure interception at the capture phase
 
-        // Initialize Turbo Mode
-        initTurboMode();
+        // Initialize Fast Forward Mode
+        initFastForwardMode();
 
         // api.removeEventListener("executed", this._handleHotReload);
         // api.addEventListener("executed", async (event) => {

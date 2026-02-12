@@ -2,16 +2,16 @@ import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-// === Turbo Mode State ===
-const turboState = {
+// === Fast Forward Mode State ===
+const fastForwardState = {
     active: false,         // 防止重入
-    enabled: true,        // Turbo Mode 是否启用（通过 toggle 控制）
-    sourceNodeId: null,    // 发起 turbo 的节点 ID
+    enabled: true,        // Fast Forward Mode 是否启用（通过 toggle 控制）
+    sourceNodeId: null,    // 发起 fast forward 的节点 ID
 };
 
 // === Color Memory ===
 const colorMemory = {
-    key: "slowargo_turbo_color",
+    key: "slowargo_fast_forward_color",
     save: function(hexColor) {
         localStorage.setItem(this.key, hexColor);
     },
@@ -95,13 +95,13 @@ async function loadClipspaceToEditor() {
         console.error("[slowargo.js] Failed to load clipspace:", error);
     }
 }
-// === Turbo Mode Helper Functions ===
+// === Fast Forward Mode Helper Functions ===
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function getTurboTargetNode() {
+function getFastForwardTargetNode() {
     // 使用 open_maskeditor 打开 mask editor 时。兜底值，不一定是当前选择的节点
     let selectedNode = ComfyApp.clipspace_return_node;
 
@@ -110,7 +110,7 @@ function getTurboTargetNode() {
     if (selectedNodes && Object.keys(selectedNodes).length === 1) {
         selectedNode = Object.values(selectedNodes)[0];
     } else {
-        console.log("[slowargo.js] Turbo mode: using clipspace_return_node from canvas");
+        console.log("[slowargo.js] Fast Forward mode: using clipspace_return_node from canvas");
     }
 
     if (selectedNode?.comfyClass !== "LoadRecentImagePlusV1") {
@@ -200,44 +200,44 @@ function waitForExecutionComplete(timeoutMs = 120000) {
     });
 }
 
-async function executeTurboCycle(targetNode) {
-    turboState.active = true;
+async function executeFastForwardCycle(targetNode) {
+    fastForwardState.active = true;
 
     try {
-        console.log("[slowargo.js] Turbo Mode: Saving mask...");
+        console.log("[slowargo.js] Fast Forward Mode: Saving mask...");
         await performMaskSave();
 
         // Wait for editor to close completely
-        console.log("[slowargo.js] Turbo Mode: Waiting for editor to close...");
+        console.log("[slowargo.js] Fast Forward Mode: Waiting for editor to close...");
         for (let i = 0; i < 50; i++) {
             if (!ComfyApp.maskeditor_is_opended()) break;
             await sleep(100);
         }
 
-        console.log("[slowargo.js] Turbo Mode: Executing workflow...");
+        console.log("[slowargo.js] Fast Forward Mode: Executing workflow...");
         app.queuePrompt(0);
 
         await waitForExecutionComplete();
 
         await sleep(500);
 
-        console.log("[slowargo.js] Turbo Mode: Refreshing image...");
+        console.log("[slowargo.js] Fast Forward Mode: Refreshing image...");
         const node = app.graph.getNodeById(targetNode.id);
         if (!node || !node.refreshImageList) {
-            console.warn("[slowargo.js] Turbo Mode: target node lost or no refreshImageList");
+            console.warn("[slowargo.js] Fast Forward Mode: target node lost or no refreshImageList");
             return;
         }
 
-        turboState.sourceNodeId = node.id;
+        fastForwardState.sourceNodeId = node.id;
         await node.refreshImageList(null, true);
 
         // MutationObserver will automatically call restoreColorAndAddToggle when editor opens
-        console.log("[slowargo.js] Turbo Mode: cycle complete");
+        console.log("[slowargo.js] Fast Forward Mode: cycle complete");
 
     } catch (error) {
-        console.error("[slowargo.js] Turbo Mode: cycle failed", error);
+        console.error("[slowargo.js] Fast Forward Mode: cycle failed", error);
     } finally {
-        turboState.active = false;
+        fastForwardState.active = false;
     }
 }
 
@@ -252,28 +252,28 @@ function restoreColorAndAddToggle() {
         console.log("[slowargo.js] Restored color:", savedColor);
     }
 
-    // Add turbo toggle button if not already added
-    addTurboToggleButton();
+    // Add fast forward toggle button if not already added
+    addFastForwardToggleButton();
 }
 
-function addTurboToggleButton() {
+function addFastForwardToggleButton() {
     // Check if toggle already exists
-    if (document.querySelector(".turbo-mode-toggle")) {
+    if (document.querySelector(".fast-forward-mode-toggle")) {
         return;
     }
 
-    const targetNode = getTurboTargetNode();
+    const targetNode = getFastForwardTargetNode();
     if (!targetNode) {
-        console.log("[slowargo.js] Turbo Mode: target node not found, skipping toggle");
+        console.log("[slowargo.js] Fast Forward Mode: target node not found, skipping toggle");
         return;
     }
 
-    turboState.sourceNodeId = targetNode.id;
+    fastForwardState.sourceNodeId = targetNode.id;
 
     // Find a button in the topbar
     const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
     if (!refBtn) {
-        console.warn("[slowargo.js] Turbo Mode: undo button not found");
+        console.warn("[slowargo.js] Fast Forward Mode: undo button not found");
         return;
     }
 
@@ -309,14 +309,14 @@ function addTurboToggleButton() {
 
     // Create toggle button
     const toggleBtn = document.createElement("button");
-    toggleBtn.className = "turbo-mode-toggle";
-    // toggleBtn.title = "Turbo Mode: Press Enter to save and run prompt, and auto refresh after completion\n(CapsLock to toggle)";
-    toggleBtn.title = "Turbo Mode: Press Enter to save and run prompt, and auto refresh after completion";
+    toggleBtn.className = "fast-forward-mode-toggle";
+    // toggleBtn.title = "Fast Forward Mode: Press Enter to save and run prompt, and auto refresh after completion\n(CapsLock to toggle)";
+    toggleBtn.title = "Fast Forward Mode: Press Enter to save and run prompt, and auto refresh after completion";
     const icon = document.createElement("i");
     icon.className = "pi pi-fast-forward";
     toggleBtn.appendChild(icon);
     const text = document.createElement("span");
-    text.textContent = "Turbo";
+    text.textContent = "FF";
     toggleBtn.appendChild(text);
     toggleBtn.style.cssText = `
         background: #1e90ff;
@@ -337,7 +337,7 @@ function addTurboToggleButton() {
 
     // Update style based on enabled state
     function updateToggleStyle() {
-        if (turboState.enabled) {
+        if (fastForwardState.enabled) {
             toggleBtn.style.opacity = "1";
             toggleBtn.style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
         } else {
@@ -347,9 +347,9 @@ function addTurboToggleButton() {
     }
 
     toggleBtn.addEventListener("click", () => {
-        turboState.enabled = !turboState.enabled;
+        fastForwardState.enabled = !fastForwardState.enabled;
         updateToggleStyle();
-        console.log("[slowargo.js] Turbo Mode:", turboState.enabled ? "enabled" : "disabled");
+        console.log("[slowargo.js] Fast Forward Mode:", fastForwardState.enabled ? "enabled" : "disabled");
     });
 
     // Insert before undo button
@@ -360,22 +360,22 @@ function addTurboToggleButton() {
     updateToggleStyle();
 }
 
-// === Turbo Mode Initialization ===
-export function initTurboMode() {
-    // Sync Turbo Mode with CapsLock state (CapsLock ON = Turbo ON, OFF = Turbo OFF)
+// === Fast Forward Mode Initialization ===
+export function initFastForwardMode() {
+    // Sync Fast Forward Mode with CapsLock state (CapsLock ON = Fast Forward ON, OFF = Fast Forward OFF)
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
 
         // const capsLockOn = e.getModifierState('CapsLock');
-        const targetNode = getTurboTargetNode();
+        const targetNode = getFastForwardTargetNode();
 
-        // Sync CapsLock state with Turbo Mode enabled state
-        // if (capsLockOn !== turboState.enabled && targetNode) {
-        //     turboState.enabled = capsLockOn;
-        //     const toggleBtn = document.querySelector(".turbo-mode-toggle");
+        // Sync CapsLock state with Fast Forward Mode enabled state
+        // if (capsLockOn !== fastForwardState.enabled && targetNode) {
+        //     fastForwardState.enabled = capsLockOn;
+        //     const toggleBtn = document.querySelector(".fast-forward-mode-toggle");
         //     if (toggleBtn) {
         //         const style = toggleBtn.style;
-        //         if (turboState.enabled) {
+        //         if (fastForwardState.enabled) {
         //             style.opacity = "1";
         //             style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
         //         } else {
@@ -383,7 +383,7 @@ export function initTurboMode() {
         //             style.boxShadow = "none";
         //         }
         //     }
-        //     console.log("[slowargo.js] Turbo Mode:", turboState.enabled ? "enabled" : "disabled");
+        //     console.log("[slowargo.js] Fast Forward Mode:", fastForwardState.enabled ? "enabled" : "disabled");
         // }
 
         if (!targetNode) return;
@@ -397,28 +397,28 @@ export function initTurboMode() {
             return;
         }
 
-        // Enter executes turbo cycle if enabled and mask is not empty
+        // Enter executes fast forward cycle if enabled and mask is not empty
         if (e.key !== 'Enter') return;
-        if (!turboState.enabled) return;
-        if (turboState.active) return;
+        if (!fastForwardState.enabled) return;
+        if (fastForwardState.active) return;
 
         if (!isMaskNonEmpty()) {
-            console.log("[slowargo.js] Turbo Mode: mask is empty, skipping");
+            console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
             return;
         }
 
         e.preventDefault();
         e.stopImmediatePropagation();
 
-        console.log("[slowargo.js] Turbo Mode: starting cycle for node", targetNode.id);
-        await executeTurboCycle(targetNode);
+        console.log("[slowargo.js] Fast Forward Mode: starting cycle for node", targetNode.id);
+        await executeFastForwardCycle(targetNode);
     }, true);
 
     // Monitor mask editor container to detect opening (handles all open methods)
     const observer = new MutationObserver(() => {
         //const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
         const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
-        if (refBtn && !document.querySelector(".turbo-mode-toggle")) {
+        if (refBtn && !document.querySelector(".fast-forward-mode-toggle")) {
             // Mask editor just opened, add toggle and restore color
             // setTimeout(() => {
             //     restoreColorAndAddToggle();
