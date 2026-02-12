@@ -27,7 +27,7 @@ const colorMemory = {
 };
 
 // === Load Clipspace Content to Current Editor ===
-async function loadClipspaceToEditor() {
+async function loadClipspaceToEditor(reloadMaskOnly = false) {
     try {
         const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
             method: 'POST',
@@ -50,7 +50,7 @@ async function loadClipspaceToEditor() {
         const canvases = document.querySelectorAll("#maskEditorCanvasContainer canvas");
         if (canvases.length < 3) return;
 
-        console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp);
+        console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp, "maskOnly:", reloadMaskOnly);
 
         const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
         const loadImg = (url) => new Promise((resolve, reject) => {
@@ -61,19 +61,8 @@ async function loadClipspaceToEditor() {
             img.src = url;
         });
 
-        // Load base and mask in parallel
-        const [baseImg, maskImg] = await Promise.all([
-            loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`)),
-            loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`))
-        ]);
-
-        // Draw base
-        const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
-        baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
-        baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
-        baseImg.src = '';
-
-        // Draw and invert mask
+        // Load mask layer
+        const maskImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`));
         const maskCtx = canvases[2].getContext('2d', {willReadFrequently: true});
         maskCtx.clearRect(0, 0, canvases[2].width, canvases[2].height);
         maskCtx.drawImage(maskImg, 0, 0, canvases[2].width, canvases[2].height);
@@ -85,15 +74,24 @@ async function loadClipspaceToEditor() {
         }
         maskCtx.putImageData(maskData, 0, 0);
 
-        // Load paint layer (optional)
-        try {
-            const paintImg = await loadImg(api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`));
-            const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
-            paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
-            paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
-            paintImg.src = '';
-        } catch (e) {
-            // Paint layer is optional
+        // Load base layer if not mask-only
+        if (!reloadMaskOnly) {
+            const baseImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`));
+            const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
+            baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
+            baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
+            baseImg.src = '';
+
+            // Load paint layer (optional)
+            try {
+                const paintImg = await loadImg(api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`));
+                const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
+                paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
+                paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
+                paintImg.src = '';
+            } catch (e) {
+                // Paint layer is optional
+            }
         }
 
         console.log("[slowargo.js] Clipspace loaded successfully");
@@ -283,25 +281,40 @@ function addFastForwardToggleButton() {
         return;
     }
 
-    // Create Reload Mask button
-    const reloadBtn = document.createElement("button");
-    reloadBtn.className = "reload-mask-button";
-    reloadBtn.title = "Reload Mask (Ctrl+L): Load most recent clipspace content";
-    const reloadIcon = document.createElement("i");
-    reloadIcon.className = "pi pi-refresh";
-    reloadBtn.appendChild(reloadIcon);
-    const reloadText = document.createElement("span");
-    reloadText.textContent = "Reload Mask";
-    reloadBtn.appendChild(reloadText);
+    // Create Reload Mask Layer Only button
+    const reloadMaskOnlyBtn = document.createElement("button");
+    reloadMaskOnlyBtn.className = "reload-mask-button";
+    reloadMaskOnlyBtn.title = "Restore Mask Layer Only: Load mask layer from most recent clipspace";
+    const reloadMaskOnlyIcon = document.createElement("i");
+    reloadMaskOnlyIcon.className = "pi pi-refresh";
+    reloadMaskOnlyBtn.appendChild(reloadMaskOnlyIcon);
+    const reloadMaskOnlyText = document.createElement("span");
+    reloadMaskOnlyText.textContent = "Mask";
+    reloadMaskOnlyBtn.appendChild(reloadMaskOnlyText);
 
-    reloadBtn.addEventListener("click", async () => {
-        await loadClipspaceToEditor();
+    reloadMaskOnlyBtn.addEventListener("click", async () => {
+        await loadClipspaceToEditor(true);
+    });
+
+    // Create Reload All Layers button
+    const reloadAllBtn = document.createElement("button");
+    reloadAllBtn.className = "reload-mask-button";
+    reloadAllBtn.title = "Restore All Layers (Ctrl+L): Load base, mask, and paint layers from most recent clipspace";
+    const reloadAllIcon = document.createElement("i");
+    reloadAllIcon.className = "pi pi-refresh";
+    reloadAllBtn.appendChild(reloadAllIcon);
+    const reloadAllText = document.createElement("span");
+    reloadAllText.textContent = "All";
+    reloadAllBtn.appendChild(reloadAllText);
+
+    reloadAllBtn.addEventListener("click", async () => {
+        await loadClipspaceToEditor(false);
     });
 
     // Create toggle button
     const toggleBtn = document.createElement("button");
     toggleBtn.className = "fast-forward-mode-toggle";
-    toggleBtn.title = "Fast Forward Mode: Press Enter to save and run prompt, and auto refresh after completion";
+    toggleBtn.title = "Fast Forward Mode (Click to toggle): Press Enter to save and run prompt, and auto refresh after completion";
     const icon = document.createElement("i");
     icon.className = "pi pi-fast-forward";
     toggleBtn.appendChild(icon);
@@ -340,7 +353,8 @@ function addFastForwardToggleButton() {
     }
 
     buttonContainer.appendChild(toggleBtn);
-    buttonContainer.appendChild(reloadBtn);
+    buttonContainer.appendChild(reloadMaskOnlyBtn);
+    buttonContainer.appendChild(reloadAllBtn);
 
     updateToggleStyle();
 }
