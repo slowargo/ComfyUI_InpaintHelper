@@ -52,6 +52,15 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
 
         console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp, "maskOnly:", reloadMaskOnly);
 
+        // Click Clear button to reset mask and GPU state
+        const clearBtn = document.querySelector("#global-mask-editor > div.flex.items-center > div > button:nth-child(4)");
+        if (clearBtn) {
+            clearBtn.click();
+            await new Promise(resolve => setTimeout(resolve, 200));
+        } else {
+            console.warn("[slowargo.js] Clear button not found");
+        }
+
         const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
         const loadImg = (url) => new Promise((resolve, reject) => {
             const img = new Image();
@@ -64,7 +73,6 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         // Load mask layer
         const maskImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`));
         const maskCtx = canvases[2].getContext('2d', {willReadFrequently: true});
-        maskCtx.clearRect(0, 0, canvases[2].width, canvases[2].height);
         maskCtx.drawImage(maskImg, 0, 0, canvases[2].width, canvases[2].height);
         maskImg.src = '';
 
@@ -78,7 +86,6 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         if (!reloadMaskOnly) {
             const baseImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`));
             const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
-            baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
             baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
             baseImg.src = '';
 
@@ -86,7 +93,6 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
             try {
                 const paintImg = await loadImg(api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`));
                 const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
-                paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
                 paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
                 paintImg.src = '';
             } catch (e) {
