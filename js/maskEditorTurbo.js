@@ -15,6 +15,11 @@ const fastForwardState = {
     sourceNodeId: null,    // 发起 fast forward 的节点 ID
 };
 
+// === Editor Blur State ===
+const editorBlurState = {
+    isBlurred: false,      // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
+};
+
 // === Color Memory ===
 const colorMemory = {
     key: "slowargo_fast_forward_color",
@@ -109,6 +114,26 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// === Editor Blur Toggle ===
+function toggleEditorBlur() {
+    editorBlurState.isBlurred = !editorBlurState.isBlurred;
+    const editor = document.querySelector(".mask-editor-dialog");
+    const mask = document.querySelector(".p-dialog-mask");
+
+    if (editor) {
+        if (editorBlurState.isBlurred) {
+            editor.classList.add("editor-blurred");
+            // Hide mask overlay
+            if (mask) mask.classList.add("editor-blurred-mask");
+        } else {
+            editor.classList.remove("editor-blurred");
+            // Show mask overlay
+            if (mask) mask.classList.remove("editor-blurred-mask");
+        }
+    }
+    console.log("[slowargo.js] Editor blur toggled:", editorBlurState.isBlurred ? "blurred" : "focused");
 }
 
 function getFastForwardTargetNode() {
@@ -262,6 +287,22 @@ function restoreColorAndAddToggle() {
         console.log("[slowargo.js] Restored color:", savedColor);
     }
 
+    // Reset blur state on editor open
+    editorBlurState.isBlurred = false;
+
+    // Apply blur state to editor
+    const editor = document.querySelector(".mask-editor-dialog");
+    const mask = document.querySelector(".p-dialog-mask");
+    if (editor) {
+        if (editorBlurState.isBlurred) {
+            editor.classList.add("editor-blurred");
+            if (mask) mask.classList.add("editor-blurred-mask");
+        } else {
+            editor.classList.remove("editor-blurred");
+            if (mask) mask.classList.remove("editor-blurred-mask");
+        }
+    }
+
     // Add fast forward toggle button if not already added
     addFastForwardToggleButton();
 }
@@ -358,9 +399,24 @@ function addFastForwardToggleButton() {
         }
     }
 
+    // Create Blur toggle button (clear → blur)
+    const blurBtn = document.createElement("button");
+    blurBtn.className = "reload-mask-button";
+    blurBtn.title = "Blur Mode: Minimize editor to left side and access main interface";
+    const blurIcon = document.createElement("i");
+    blurIcon.className = "pi pi-eye-slash";
+    blurBtn.appendChild(blurIcon);
+
+    blurBtn.addEventListener("click", () => {
+        if (!editorBlurState.isBlurred) {
+            toggleEditorBlur();
+        }
+    });
+
     buttonContainer.appendChild(toggleBtn);
     buttonContainer.appendChild(reloadMaskOnlyBtn);
     buttonContainer.appendChild(reloadAllBtn);
+    buttonContainer.appendChild(blurBtn);
 
     updateToggleStyle();
 }
@@ -370,6 +426,17 @@ export function initFastForwardMode() {
     // Sync Fast Forward Mode with CapsLock state (CapsLock ON = Fast Forward ON, OFF = Fast Forward OFF)
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
+
+        // Esc key toggles blur mode (only in focus mode)
+        // if (e.key === 'Escape' && !editorBlurState.isBlurred) {
+        //     e.preventDefault();
+        //     e.stopImmediatePropagation();
+        //     toggleEditorBlur();
+        //     return;
+        // }
+
+        // In blur mode, let all keyboard events pass through to main UI
+        if (editorBlurState.isBlurred) return;
 
         // const capsLockOn = e.getModifierState('CapsLock');
         const targetNode = getFastForwardTargetNode();
@@ -429,6 +496,22 @@ export function initFastForwardMode() {
             //     restoreColorAndAddToggle();
             // }, 100);
             restoreColorAndAddToggle();
+
+            // Add click listener to toggle blur state when clicking on blurred editor
+            const editor = document.querySelector(".mask-editor-dialog");
+            if (editor && !editor.dataset.blurListenerAdded) {
+                editor.addEventListener('click', (e) => {
+                    if (editorBlurState.isBlurred) {
+                        // Check if clicked on button or control - don't toggle
+                        const button = e.target.closest('button, input[type="color"], input[type="range"]');
+                        if (!button) {
+                            e.stopImmediatePropagation();
+                            toggleEditorBlur();
+                        }
+                    }
+                });
+                editor.dataset.blurListenerAdded = 'true';
+            }
         }
     });
 
@@ -442,4 +525,4 @@ export function initFastForwardMode() {
 }
 
 // Export performMaskSave for use in maskeditor.save command
-export { performMaskSave };
+export { performMaskSave, toggleEditorBlur };
