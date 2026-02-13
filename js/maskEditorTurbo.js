@@ -287,6 +287,17 @@ function restoreColorAndAddToggle() {
         console.log("[slowargo.js] Restored color:", savedColor);
     }
 
+    const targetNode = getFastForwardTargetNode();
+    if (!targetNode) {
+        console.log("[slowargo.js] Fast Forward Mode: target node not found, skipping toggle");
+        return;
+    }
+
+    fastForwardState.sourceNodeId = targetNode.id;
+
+    // Add Fast Forward toggle button if not already added
+    addFastForwardToggleButton();
+
     // It triggers observer. Disable for now.
     // === 最大化 mask editor dialog ===
     // const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
@@ -299,20 +310,18 @@ function restoreColorAndAddToggle() {
     editorBlurState.isBlurred = false;
 
     // Apply blur state to editor
-    const editor = document.querySelector(".mask-editor-dialog");
-    const mask = document.querySelector(".p-dialog-mask");
-    if (editor) {
-        if (editorBlurState.isBlurred) {
-            editor.classList.add("editor-blurred");
-            if (mask) mask.classList.add("editor-blurred-mask");
-        } else {
-            editor.classList.remove("editor-blurred");
-            if (mask) mask.classList.remove("editor-blurred-mask");
-        }
-    }
+    // const editor = document.querySelector(".mask-editor-dialog");
+    // const mask = document.querySelector(".p-dialog-mask");
+    // if (editor) {
+    //     if (editorBlurState.isBlurred) {
+    //         editor.classList.add("editor-blurred");
+    //         if (mask) mask.classList.add("editor-blurred-mask");
+    //     } else {
+    //         editor.classList.remove("editor-blurred");
+    //         if (mask) mask.classList.remove("editor-blurred-mask");
+    //     }
+    // }
 
-    // Add Fast Forward toggle button if not already added
-    addFastForwardToggleButton();
 }
 
 function addFastForwardToggleButton() {
@@ -320,14 +329,6 @@ function addFastForwardToggleButton() {
     if (document.querySelector(".fast-forward-mode-toggle")) {
         return;
     }
-
-    const targetNode = getFastForwardTargetNode();
-    if (!targetNode) {
-        console.log("[slowargo.js] Fast Forward Mode: target node not found, skipping toggle");
-        return;
-    }
-
-    fastForwardState.sourceNodeId = targetNode.id;
 
     // Find a button in the topbar
     const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
@@ -516,14 +517,23 @@ export function initFastForwardMode() {
     // Monitor mask editor container to detect opening (handles all open methods)
     const observer = new MutationObserver(() => {
         // const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
-        const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
-        // const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
+        // const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
+        const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
         if (refBtn && !document.querySelector(".fast-forward-mode-toggle")) {
             // Mask editor just opened, add toggle and restore color
             // setTimeout(() => {
             //     restoreColorAndAddToggle();
             // }, 100);
+
+            // restoreColorAndAddToggle会最大化对话框，临时断开 observer，执行完操作后再重新连接
+            // observer.disconnect();
             restoreColorAndAddToggle();
+            // observer.observe(document.body, {
+            //     childList: true,
+            //     subtree: true,
+            //     attributes: false,
+            //     characterData: false
+            // });
 
             // Add click listener to toggle blur state when clicking on blurred editor
             const editor = document.querySelector(".mask-editor-dialog");
@@ -546,7 +556,7 @@ export function initFastForwardMode() {
     // Start observing document for changes
     observer.observe(document.body, {
         childList: true,
-        subtree: true,
+        subtree: false,
         attributes: false,
         characterData: false
     });
