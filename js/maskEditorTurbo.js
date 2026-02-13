@@ -287,12 +287,13 @@ function restoreColorAndAddToggle() {
         console.log("[slowargo.js] Restored color:", savedColor);
     }
 
+    // It triggers observer. Disable for now.
     // === 最大化 mask editor dialog ===
-    const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
-    if (maximizeBtn) {
-        maximizeBtn.click();
-        // console.log("[slowargo.js] Mask editor dialog maximized");
-    }
+    // const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
+    // if (maximizeBtn) {
+    //     maximizeBtn.click();
+    //     // console.log("[slowargo.js] Mask editor dialog maximized");
+    // }
 
     // Reset blur state on editor open
     editorBlurState.isBlurred = false;
@@ -448,22 +449,6 @@ export function initFastForwardMode() {
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
 
-        // Esc key toggles blur mode (intercept before blur mode pass-through)
-        if (e.key === 'Escape') {
-            // If mask is empty, let dialog close naturally
-            if (!isMaskNonEmpty()) {
-                return;
-            }
-            // Mask is non-empty: toggle blur state and prevent dialog from closing
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleEditorBlur();
-            return;
-        }
-
-        // In blur mode, let all keyboard events pass through to main UI
-        if (editorBlurState.isBlurred) return;
-
         // const capsLockOn = e.getModifierState('CapsLock');
         const targetNode = getFastForwardTargetNode();
 
@@ -485,6 +470,22 @@ export function initFastForwardMode() {
         // }
 
         if (!targetNode) return;
+
+        // Esc key toggles blur mode (intercept before blur mode pass-through)
+        if (e.key === 'Escape') {
+            // If mask is empty, let dialog close naturally
+            if (!isMaskNonEmpty()) {
+                return;
+            }
+            // Mask is non-empty: toggle blur state and prevent dialog from closing
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleEditorBlur();
+            return;
+        }
+
+        // In blur mode, let all keyboard events pass through to main UI
+        if (editorBlurState.isBlurred) return;
 
         // Ctrl+L loads clipspace content into current editor
         if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
@@ -515,8 +516,8 @@ export function initFastForwardMode() {
     // Monitor mask editor container to detect opening (handles all open methods)
     const observer = new MutationObserver(() => {
         // const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
-        // const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
-        const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
+        const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
+        // const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
         if (refBtn && !document.querySelector(".fast-forward-mode-toggle")) {
             // Mask editor just opened, add toggle and restore color
             // setTimeout(() => {
