@@ -298,13 +298,15 @@ function restoreColorAndAddToggle() {
     // Add Fast Forward toggle button if not already added
     addFastForwardToggleButton();
 
-    // It triggers observer. Disable for now.
     // === 最大化 mask editor dialog ===
-    // const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
-    // if (maximizeBtn) {
-    //     maximizeBtn.click();
-    //     // console.log("[slowargo.js] Mask editor dialog maximized");
-    // }
+    const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
+    if (maximizeBtn) {
+        // maxHeight isn't available yet at this moment
+        // const dialogMask = document.querySelector("div.p-dialog-mask")
+        // const maxHeight = window.getComputedStyle(dialogMask).maxHeight;
+        maximizeBtn.click();
+        // console.log("[slowargo.js] Mask editor dialog maximized");
+    }
 
     // Reset blur state on editor open
     editorBlurState.isBlurred = false;
