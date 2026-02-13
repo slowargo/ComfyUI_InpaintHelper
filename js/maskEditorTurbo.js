@@ -30,6 +30,19 @@ const colorMemory = {
     }
 };
 
+// === Access Pinia Store for GPU Sync ===
+function getMaskEditorStore() {
+    try {
+        const vueApp = document.querySelector('#vue-app')?.__vue_app__;
+        if (!vueApp) return null;
+        const pinia = vueApp.config.globalProperties?.$pinia;
+        if (!pinia?._s) return null;
+        return pinia._s.get('maskEditor') || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor(reloadMaskOnly = false) {
     try {
@@ -57,13 +70,13 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp, "maskOnly:", reloadMaskOnly);
 
         // Click Clear button to reset mask and GPU state
-        const clearBtn = document.querySelector("#global-mask-editor > div.flex.items-center > div > button:nth-child(4)");
-        if (clearBtn) {
-            clearBtn.click();
-            await new Promise(resolve => setTimeout(resolve, 200));
-        } else {
-            console.warn("[slowargo.js] Clear button not found");
-        }
+        // const clearBtn = document.querySelector("#global-mask-editor > div.flex.items-center > div > button:nth-child(4)");
+        // if (clearBtn) {
+        //     clearBtn.click();
+        //     await new Promise(resolve => setTimeout(resolve, 200));
+        // } else {
+        //     console.warn("[slowargo.js] Clear button not found");
+        // }
 
         const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
         const loadImg = (url) => new Promise((resolve, reject) => {
@@ -77,9 +90,11 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         // Load mask layer
         const maskImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`));
         const maskCtx = canvases[2].getContext('2d', {willReadFrequently: true});
+        maskCtx.clearRect(0, 0, canvases[2].width, canvases[2].height);
         maskCtx.drawImage(maskImg, 0, 0, canvases[2].width, canvases[2].height);
         maskImg.src = '';
 
+        // Invert alpha channel
         const maskData = maskCtx.getImageData(0, 0, canvases[2].width, canvases[2].height);
         for (let i = 3; i < maskData.data.length; i += 4) {
             maskData.data[i] = 255 - maskData.data[i];
@@ -90,6 +105,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         if (!reloadMaskOnly) {
             const baseImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`));
             const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
+            baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
             baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
             baseImg.src = '';
 
@@ -97,11 +113,23 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
             try {
                 const paintImg = await loadImg(api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`));
                 const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
+                paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
                 paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
                 paintImg.src = '';
             } catch (e) {
                 // Paint layer is optional
             }
+        }
+
+        // Sync GPU textures via Pinia store's canvasHistory.
+        // saveState() increments currentStateIndex, which triggers the watch
+        // in useBrushDrawing.ts that calls updateGPUFromCanvas().
+        const store = getMaskEditorStore();
+        if (store?.canvasHistory?.saveState) {
+            store.canvasHistory.saveState();
+            console.log("[slowargo.js] GPU sync triggered via canvasHistory.saveState()");
+        } else {
+            console.warn("[slowargo.js] Pinia store not accessible, GPU textures may be stale");
         }
 
         console.log("[slowargo.js] Clipspace loaded successfully");
