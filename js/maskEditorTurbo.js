@@ -441,13 +441,18 @@ export function initFastForwardMode() {
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
 
-        // Esc key toggles blur mode (only in focus mode)
-        // if (e.key === 'Escape' && !editorBlurState.isBlurred) {
-        //     e.preventDefault();
-        //     e.stopImmediatePropagation();
-        //     toggleEditorBlur();
-        //     return;
-        // }
+        // Esc key toggles blur mode (intercept before blur mode pass-through)
+        if (e.key === 'Escape') {
+            // If mask is empty, let dialog close naturally
+            if (!isMaskNonEmpty()) {
+                return;
+            }
+            // Mask is non-empty: toggle blur state and prevent dialog from closing
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleEditorBlur();
+            return;
+        }
 
         // In blur mode, let all keyboard events pass through to main UI
         if (editorBlurState.isBlurred) return;
