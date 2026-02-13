@@ -131,6 +131,15 @@ function toggleEditorBlur() {
             editor.classList.remove("editor-blurred");
             // Show mask overlay
             if (mask) mask.classList.remove("editor-blurred-mask");
+
+            // Restore selected node when returning from blur
+            if (fastForwardState.sourceNodeId) {
+                const node = app.graph.getNodeById(fastForwardState.sourceNodeId);
+                if (node) {
+                    app.canvas.selectNodes([node]);
+                    console.log("[slowargo.js] Restored selected node:", node.id);
+                }
+            }
         }
     }
     console.log("[slowargo.js] Editor blur toggled:", editorBlurState.isBlurred ? "blurred" : "focused");
@@ -353,7 +362,7 @@ function addFastForwardToggleButton() {
     reloadMaskOnlyBtn.addEventListener("click", async (e) => {
         await loadClipspaceToEditor(true);
         if (e.shiftKey) {
-            const targetNode = getFastForwardTargetNode();
+            const targetNode = fastForwardState.sourceNodeId;//getFastForwardTargetNode();
             if (targetNode && fastForwardState.enabled) {
                 console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
                 await executeFastForwardCycle(targetNode);
@@ -375,7 +384,7 @@ function addFastForwardToggleButton() {
     reloadAllBtn.addEventListener("click", async (e) => {
         await loadClipspaceToEditor(false);
         if (e.shiftKey) {
-            const targetNode = getFastForwardTargetNode();
+            const targetNode = fastForwardState.sourceNodeId;//getFastForwardTargetNode();
             if (targetNode && fastForwardState.enabled) {
                 console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
                 await executeFastForwardCycle(targetNode);
@@ -453,7 +462,7 @@ export function initFastForwardMode() {
         if (!ComfyApp.maskeditor_is_opended()) return;
 
         // const capsLockOn = e.getModifierState('CapsLock');
-        const targetNode = getFastForwardTargetNode();
+        let targetNode = getFastForwardTargetNode();
 
         // Sync CapsLock state with Fast Forward Mode enabled state
         // if (capsLockOn !== fastForwardState.enabled && targetNode) {
@@ -471,6 +480,11 @@ export function initFastForwardMode() {
         //     }
         //     console.log("[slowargo.js] Fast Forward Mode:", fastForwardState.enabled ? "enabled" : "disabled");
         // }
+
+        if (editorBlurState.isBlurred) {
+            // 进入 blur 模式后可能选了其他节点，让 targetNode 有值走后面的 Escape 键处理函数，退出 blur 模式
+            targetNode = fastForwardState.sourceNodeId;
+        }
 
         if (!targetNode) return;
 
