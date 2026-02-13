@@ -12,7 +12,7 @@ document.head.appendChild(link);
 const fastForwardState = {
     active: false,         // 防止重入
     enabled: true,        // Fast Forward Mode 是否启用（通过 toggle 控制）
-    sourceNodeId: null,    // 发起 fast forward 的节点 ID
+    sourceNodeId: null,    // 发起 Fast Forward 的节点 ID
 };
 
 // === Editor Blur State ===
@@ -287,6 +287,13 @@ function restoreColorAndAddToggle() {
         console.log("[slowargo.js] Restored color:", savedColor);
     }
 
+    // === 最大化 mask editor dialog ===
+    const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
+    if (maximizeBtn) {
+        maximizeBtn.click();
+        // console.log("[slowargo.js] Mask editor dialog maximized");
+    }
+
     // Reset blur state on editor open
     editorBlurState.isBlurred = false;
 
@@ -303,7 +310,7 @@ function restoreColorAndAddToggle() {
         }
     }
 
-    // Add fast forward toggle button if not already added
+    // Add Fast Forward toggle button if not already added
     addFastForwardToggleButton();
 }
 
@@ -488,7 +495,7 @@ export function initFastForwardMode() {
             return;
         }
 
-        // Enter executes fast forward cycle if enabled and mask is not empty
+        // Enter executes Fast Forward cycle if enabled and mask is not empty
         if (e.key !== 'Enter') return;
         if (!fastForwardState.enabled) return;
         if (fastForwardState.active) return;
@@ -507,8 +514,9 @@ export function initFastForwardMode() {
 
     // Monitor mask editor container to detect opening (handles all open methods)
     const observer = new MutationObserver(() => {
-        //const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
-        const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
+        // const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
+        // const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
+        const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
         if (refBtn && !document.querySelector(".fast-forward-mode-toggle")) {
             // Mask editor just opened, add toggle and restore color
             // setTimeout(() => {
