@@ -1,0 +1,117 @@
+/* === String History Popup === */
+
+/* Search input field */
+.slowargo-history-search {
+    width: 100%;
+    padding: 8px;
+    font-size: 12px !important;
+    border: 1px solid #555;
+    border-radius: 5px;
+    background: #2a2a2a;
+    color: #ddd;
+    margin-bottom: 8px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.slowargo-history-search:focus {
+    border-color: #888;
+}
+
+/* List container with independent scrolling */
+.slowargo-history-list-container {
+    max-height: 500px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Wrapper for search + list */
+/* 原来整个容器是 minWidth: 600px, maxHeight: 500px, padding: 10px */
+/* 现在分离搜索框和列表，wrapper高度增加到 560px 以容纳搜索框 (~30px) + 列表 (500px) */
+.slowargo-history-wrapper {
+    min-width: 600px;
+    max-height: 560px;
+    /*padding: 10px;*/
+    display: flex;
+    flex-direction: column;
+}
+
+/* History list item row */
+.slowargo-history-row {
+    display: flex;
+    align-items: center;
+    padding: 5px;
+    background: #353535;
+    border-radius: 5px;
+    /* overflow: hidden; // 确保子元素撑满时不会超出圆角 */
+    gap: 2px;
+}
+
+/* History item content text */
+.slowargo-history-text {
+    flex: 1;
+    /* 关键：高度撑满父容器 */
+    align-self: stretch;
+    /* 关键：为了内部文字垂直居中 */
+    display: flex;
+    /* 关键：文字垂直居中 */
+    align-items: center;
+    /* 这里保留你需要的文字上下边距 */
+    padding: 5px 5px;
+    cursor: pointer;
+    font-size: 10px;
+    color: #bbb;
+    white-space: pre-wrap;
+    transition: background 0.2s;
+}
+
+/* .slowargo-history-text:hover { */
+    /* background: #454545; */
+/* } */
+
+/* Pin button */
+/* opacity: item.pinned ? 1 : 0.3 的动态值在 JS 中通过 className "pinned" 控制 */
+/* 使用更高优先级的选择器覆盖 .comfy-modal button 的全局样式 */
+.slowargo-history-wrapper .slowargo-history-pin-btn {
+    background: none !important;
+    border: none !important;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+    padding: 0 !important;
+    height: auto !important;
+    width: auto !important;
+    color: inherit !important;
+}
+
+.slowargo-history-wrapper .slowargo-history-pin-btn.pinned {
+    opacity: 1;
+}
+
+.slowargo-history-wrapper .slowargo-history-pin-btn:hover {
+    opacity: 0.8;
+}
+
+/* Delete button */
+/* 原注释：padding: "0 5px" (目前未启用) */
+/* 使用更高优先级的选择器覆盖 .comfy-modal button 的全局样式 */
+.slowargo-history-wrapper .slowargo-history-delete-btn {
+    background: none !important;
+    border: none !important;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    padding: 0 !important;
+    height: auto !important;
+    width: auto !important;
+    color: inherit !important;
+}
+
+.slowargo-history-wrapper .slowargo-history-delete-btn:hover {
+    opacity: 0.9;
+}
+

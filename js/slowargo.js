@@ -4,6 +4,12 @@ import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
 import { initFastForwardMode, performMaskSave } from "./maskEditorTurbo.js";
 
+// Load CSS dynamically
+const link = document.createElement("link");
+link.rel = "stylesheet";
+link.href = new URL("./slowargo.css", import.meta.url).href;
+document.head.appendChild(link);
+
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
@@ -466,9 +472,9 @@ app.registerExtension({
                 return result;
             };
         } else if (nodeType?.comfyClass == "RunButtonNode") {
-            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
-                const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+                const result = origOnNodeCreated?.apply(this, arguments);
 
                 // 找到我们定义的 trigger_count 挂件
                 const widget = this.widgets.find((w) => w.name === "trigger_count");
@@ -493,11 +499,12 @@ app.registerExtension({
 
                 this.constructor.exposedActions = ["Run"];
 
-                return r;
+                return result;
             };
         } else if (nodeType?.comfyClass === "RememberStrings") {
-            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
+                const result = origOnNodeCreated?.apply(this, arguments);
                 this.addWidget("button", "View History 📂", null, () => {
                     this.showHistoryPopup();
                 });
@@ -518,71 +525,60 @@ app.registerExtension({
                     } catch (error) {
                         console.error("[slowargo.js] Error fetching string history:", error);
                         alert("Error fetching history: " + error.message);
+                        return;
                     }
                     // console.log("[slowargo.js] get_string_history", entries);
 
-                    // 2. 创建 Popup 内容
-                    const content = $el("div", {
-                        style: {
-                            minWidth: "600px",
-                            maxHeight: "500px",
-                            overflowY: "auto",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "8px",
-                            padding: "10px"
+                    // 2. 创建搜索框和列表容器
+                    const searchInput = $el("input", {
+                        type: "text",
+                        id: "slowargo-history-search",
+                        placeholder: "🔍 Search...",
+                        className: "slowargo-history-search",
+                        onkeydown: (e) => {
+                            if (e.key === "Enter") searchInput.blur();
                         }
                     });
 
+                    // 列表容器（独立滚动）
+                    const listContainer = $el("div", {
+                        className: "slowargo-history-list-container"
+                    });
+
+                    // 包装容器
+                    const wrapper = $el("div", {
+                        className: "slowargo-history-wrapper"
+                    }, [searchInput, listContainer]);
+
+                    // 提取搜索过滤函数（DRY）
+                    const getFilteredEntries = () => {
+                        const query = searchInput.value.toLowerCase();
+                        return query ? entries.filter(item =>
+                            item.content.toLowerCase().includes(query)
+                        ) : entries;
+                    };
+
                     const renderList = (data) => {
-                        content.innerHTML = ""; // Clear existing content
+                        listContainer.innerHTML = ""; // Clear existing content
                         const fragment = document.createDocumentFragment(); // Create a document fragment
                         data.forEach(item => {
                             const row = $el("div", {
-                                style: {
-                                    display: "flex",
-                                    alignItems: "center",
-                                    padding: "5px",
-                                    background: "#353535",
-                                    borderRadius: "5px",
-                                    // overflow: "hidden", // 确保子元素撑满时不会超出圆角
-                                    gap: "2px"
-                                }
+                                className: "slowargo-history-row"
                             });
 
                             // 点击内容回填并关闭
                             const text = $el("div", {
                                 textContent: item.content,
-                                style: {
-                                    flex: 1,
-                                    alignSelf: "stretch",    // 关键：高度撑满父容器
-                                    display: "flex",        // 关键：为了内部文字垂直居中
-                                    alignItems: "center",   // 关键：文字垂直居中
-                                    padding: "5px 5px",    // 这里保留你需要的文字上下边距
-                                    cursor: "pointer",
-                                    fontSize: "10px",
-                                    color: "#bbb",
-                                    whiteSpace: "pre-wrap",
-                                    transition: "background 0.2s"
-                                },
+                                className: "slowargo-history-text",
                                 onclick: () => {
                                     this.widgets.find(w => w.name === "string").value = item.content;
                                     popup.close(); // 选中后自动关闭
-                                },
-                                // 只在文本感应区显示悬停效果
-                                // onmouseenter: (e) => e.target.style.background = "#454545",
-                                // onmouseleave: (e) => e.target.style.background = "transparent"
+                                }
                             });
 
                             const pinBtn = $el("button", {
                                 textContent: item.pinned ? "📌" : "📍",
-                                style: {
-                                    background: "none",
-                                    border: "none",
-                                    cursor: "pointer",
-                                    fontSize: "14px",
-                                    opacity: item.pinned ? 1 : 0.3
-                                },
+                                className: `slowargo-history-pin-btn ${item.pinned ? "pinned" : ""}`,
                                 onclick: async (e) => {
                                     e.stopPropagation();
                                     try {
@@ -593,8 +589,8 @@ app.registerExtension({
                                         if (!res.ok) {
                                             throw new Error(`HTTP error! status: ${res.status}`);
                                         }
-                                        const nextData = await res.json();
-                                        renderList(nextData.entries); // 局部刷新，直接使用 nextData.entries
+                                        entries = (await res.json()).entries; // 局部刷新，直接使用 nextData.entries
+                                        renderList(getFilteredEntries()); // 保持搜索状态重新渲染
                                     } catch (error) {
                                         console.error("[slowargo.js] Error toggling pin status:", error);
                                         alert("Error toggling pin status: " + error.message);
@@ -604,14 +600,7 @@ app.registerExtension({
 
                             const deleteBtn = $el("button", {
                                 textContent: "🗑️",
-                                style: {
-                                    background: "none",
-                                    border: "none",
-                                    cursor: "pointer",
-                                    fontSize: "14px",
-                                    opacity: 0.6,
-                                    // padding: "0 5px"
-                                },
+                                className: "slowargo-history-delete-btn",
                                 onclick: async (e) => {
                                     e.stopPropagation(); // 防止触发回填逻辑
                                     if (confirm("Delete entry " + item.content + " ?")) {
@@ -623,8 +612,8 @@ app.registerExtension({
                                             if (!res.ok) {
                                                 throw new Error(`HTTP error! status: ${res.status}`);
                                             }
-                                            const nextData = await res.json();
-                                            renderList(nextData.entries); // 刷新列表，直接使用 nextData.entries
+                                            entries = (await res.json()).entries; // 刷新列表，直接使用 nextData.entries
+                                            renderList(getFilteredEntries()); // 保持搜索状态重新渲染
                                         } catch (error) {
                                             console.error("[slowargo.js] Error deleting history entry:", error);
                                             alert("Error deleting entry: " + error.message);
@@ -638,7 +627,12 @@ app.registerExtension({
                             row.appendChild(deleteBtn);
                             fragment.appendChild(row); // Append to fragment instead of direct content
                         });
-                        content.appendChild(fragment); // Append fragment to content once
+                        listContainer.appendChild(fragment); // Append fragment to content once
+                    };
+
+                    // 搜索过滤
+                    searchInput.oninput = () => {
+                        renderList(getFilteredEntries());
                     };
 
                     renderList(entries);
@@ -675,8 +669,17 @@ app.registerExtension({
                         originalClose.apply(popup);
                     };
 
-                    popup.show(content);
+                    popup.show(wrapper);
+
+                    // ComfyDialog.show() 没有焦点管理，需要手动处理
+                    // 自动聚焦搜索框，防止键盘事件被 canvas 拦截
+                    setTimeout(() => searchInput.focus(), 0);
+
+                    // // 使 popup 容器可获焦，并将焦点移入，防止键盘事件被 canvas 拦截
+                    // popup.element.tabIndex = -1;
+                    // popup.element.focus();
                 }
+                return result;
             }
         }
 
