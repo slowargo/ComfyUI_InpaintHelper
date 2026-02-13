@@ -339,8 +339,15 @@ function addFastForwardToggleButton() {
     reloadMaskOnlyText.textContent = "Mask";
     reloadMaskOnlyBtn.appendChild(reloadMaskOnlyText);
 
-    reloadMaskOnlyBtn.addEventListener("click", async () => {
+    reloadMaskOnlyBtn.addEventListener("click", async (e) => {
         await loadClipspaceToEditor(true);
+        if (e.shiftKey) {
+            const targetNode = getFastForwardTargetNode();
+            if (targetNode && fastForwardState.enabled) {
+                console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
+                await executeFastForwardCycle(targetNode);
+            }
+        }
     });
 
     // Create Reload All Layers button
@@ -354,8 +361,15 @@ function addFastForwardToggleButton() {
     reloadAllText.textContent = "All";
     reloadAllBtn.appendChild(reloadAllText);
 
-    reloadAllBtn.addEventListener("click", async () => {
+    reloadAllBtn.addEventListener("click", async (e) => {
         await loadClipspaceToEditor(false);
+        if (e.shiftKey) {
+            const targetNode = getFastForwardTargetNode();
+            if (targetNode && fastForwardState.enabled) {
+                console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
+                await executeFastForwardCycle(targetNode);
+            }
+        }
     });
 
     // Create toggle button

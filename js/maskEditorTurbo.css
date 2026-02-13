@@ -4,16 +4,15 @@
     position: fixed !important;
     left: 0 !important;
     right: auto !important;
-    top: 0 !important;
-    bottom: 0 !important;
-    width: 30% !important;                    /* Editor takes 30% width */
+    top: auto !important;                     /* Preserve original vertical position */
+    bottom: auto !important;
     height: 100% !important;
     filter: blur(1px);
     opacity: 0.8 !important;                  /* 80% opacity, still somewhat visible */
     pointer-events: auto;
     z-index: 1102;                            /* Above dialog mask (z-index: 1101) */
     cursor: pointer;
-    transform: translateX(-70%) !important;   /* Slide left by 70% of width, exposing ~9% on left edge */
+    transform: translateX(-80%) !important;   /* Slide left by 80%, exposing rightmost 20% */
     transition: transform 0.3s ease !important;
 }
 
@@ -28,10 +27,10 @@
     pointer-events: none;
 }
 
-/* Hide topbar (header with buttons) when editor is blurred */
-.mask-editor-dialog.editor-blurred .p-dialog-header {
-    display: none !important;
-}
+/* Adjust topbar layout when editor is blurred - align buttons to left so they move with editor */
+/*.mask-editor-dialog.editor-blurred .p-dialog-header {*/
+/*    justify-content: flex-start !important;*/
+/*}*/
 
 /* Adjust button container position when editor is blurred - move closer to edge */
 .mask-editor-dialog.editor-blurred .ff-mode-button-container {
