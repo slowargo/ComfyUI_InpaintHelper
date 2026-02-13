@@ -8,16 +8,15 @@ link.rel = "stylesheet";
 link.href = new URL("./maskEditorTurbo.css", import.meta.url).href;
 document.head.appendChild(link);
 
-// === Fast Forward Mode State ===
-const fastForwardState = {
-    active: false,         // 防止重入
-    enabled: true,        // Fast Forward Mode 是否启用（通过 toggle 控制）
-    sourceNodeId: null,    // 发起 Fast Forward 的节点 ID
-};
+// === Editor State ===
+const editorState = {
+    // Fast Forward Mode
+    cycleInProgress: false, // cycle 是否在进行中（防止重入）
+    fastForwardModeOn: true, // Fast Forward Mode 是否启用（通过 toggle 控制）
+    sourceNodeId: null,     // 发起 Fast Forward 的节点 ID
 
-// === Editor Blur State ===
-const editorBlurState = {
-    isBlurred: false,      // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
+    // Editor Blur
+    isBlurred: false,       // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
 };
 
 // === Color Memory ===
@@ -118,12 +117,12 @@ function sleep(ms) {
 
 // === Editor Blur Toggle ===
 function toggleEditorBlur() {
-    editorBlurState.isBlurred = !editorBlurState.isBlurred;
+    editorState.isBlurred = !editorState.isBlurred;
     const editor = document.querySelector(".mask-editor-dialog");
     const mask = document.querySelector(".p-dialog-mask");
 
     if (editor) {
-        if (editorBlurState.isBlurred) {
+        if (editorState.isBlurred) {
             editor.classList.add("editor-blurred");
             // Hide mask overlay
             if (mask) mask.classList.add("editor-blurred-mask");
@@ -133,8 +132,8 @@ function toggleEditorBlur() {
             if (mask) mask.classList.remove("editor-blurred-mask");
 
             // Restore selected node when returning from blur
-            if (fastForwardState.sourceNodeId) {
-                const node = app.graph.getNodeById(fastForwardState.sourceNodeId);
+            if (editorState.sourceNodeId) {
+                const node = app.graph.getNodeById(editorState.sourceNodeId);
                 if (node) {
                     app.canvas.selectNodes([node]);
                     console.log("[slowargo.js] Restored selected node:", node.id);
@@ -142,7 +141,7 @@ function toggleEditorBlur() {
             }
         }
     }
-    console.log("[slowargo.js] Editor blur toggled:", editorBlurState.isBlurred ? "blurred" : "focused");
+    console.log("[slowargo.js] Editor blur toggled:", editorState.isBlurred ? "blurred" : "focused");
 }
 
 function getFastForwardTargetNode() {
@@ -245,7 +244,7 @@ function waitForExecutionComplete(timeoutMs = 120000) {
 }
 
 async function executeFastForwardCycle(targetNode) {
-    fastForwardState.active = true;
+    editorState.cycleInProgress = true;
 
     try {
         console.log("[slowargo.js] Fast Forward Mode: Saving mask...");
@@ -272,7 +271,7 @@ async function executeFastForwardCycle(targetNode) {
             return;
         }
 
-        fastForwardState.sourceNodeId = node.id;
+        editorState.sourceNodeId = node.id;
         await node.refreshImageList(null, true);
 
         // MutationObserver will automatically call restoreColorAndAddToggle when editor opens
@@ -281,7 +280,7 @@ async function executeFastForwardCycle(targetNode) {
     } catch (error) {
         console.error("[slowargo.js] Fast Forward Mode: cycle failed", error);
     } finally {
-        fastForwardState.active = false;
+        editorState.cycleInProgress = false;
     }
 }
 
@@ -302,7 +301,7 @@ function restoreColorAndAddToggle() {
         return;
     }
 
-    fastForwardState.sourceNodeId = targetNode.id;
+    editorState.sourceNodeId = targetNode.id;
 
     // Add Fast Forward toggle button if not already added
     addFastForwardToggleButton();
@@ -318,13 +317,13 @@ function restoreColorAndAddToggle() {
     }
 
     // Reset blur state on editor open
-    editorBlurState.isBlurred = false;
+    editorState.isBlurred = false;
 
     // Apply blur state to editor
     // const editor = document.querySelector(".mask-editor-dialog");
     // const mask = document.querySelector(".p-dialog-mask");
     // if (editor) {
-    //     if (editorBlurState.isBlurred) {
+    //     if (editorState.isBlurred) {
     //         editor.classList.add("editor-blurred");
     //         if (mask) mask.classList.add("editor-blurred-mask");
     //     } else {
@@ -362,8 +361,8 @@ function addFastForwardToggleButton() {
     reloadMaskOnlyBtn.addEventListener("click", async (e) => {
         await loadClipspaceToEditor(true);
         if (e.shiftKey) {
-            const targetNode = fastForwardState.sourceNodeId;//getFastForwardTargetNode();
-            if (targetNode && fastForwardState.enabled) {
+            const targetNode = app.graph.getNodeById(editorState.sourceNodeId);//getFastForwardTargetNode();
+            if (targetNode && editorState.fastForwardModeOn) {
                 console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
                 await executeFastForwardCycle(targetNode);
             }
@@ -384,8 +383,8 @@ function addFastForwardToggleButton() {
     reloadAllBtn.addEventListener("click", async (e) => {
         await loadClipspaceToEditor(false);
         if (e.shiftKey) {
-            const targetNode = fastForwardState.sourceNodeId;//getFastForwardTargetNode();
-            if (targetNode && fastForwardState.enabled) {
+            const targetNode = app.graph.getNodeById(editorState.sourceNodeId);//getFastForwardTargetNode();
+            if (targetNode && editorState.fastForwardModeOn) {
                 console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
                 await executeFastForwardCycle(targetNode);
             }
@@ -405,7 +404,7 @@ function addFastForwardToggleButton() {
 
     // Update style based on enabled state
     function updateToggleStyle() {
-        if (fastForwardState.enabled) {
+        if (editorState.fastForwardModeOn) {
             toggleBtn.classList.add("enabled");
             toggleBtn.classList.remove("disabled");
         } else {
@@ -415,9 +414,9 @@ function addFastForwardToggleButton() {
     }
 
     toggleBtn.addEventListener("click", () => {
-        fastForwardState.enabled = !fastForwardState.enabled;
+        editorState.fastForwardModeOn = !editorState.fastForwardModeOn;
         updateToggleStyle();
-        console.log("[slowargo.js] Fast Forward Mode:", fastForwardState.enabled ? "enabled" : "disabled");
+        console.log("[slowargo.js] Fast Forward Mode:", editorState.fastForwardModeOn ? "enabled" : "disabled");
     });
 
     // Create a container for buttons at top-left of canvas (avoiding sidebar)
@@ -442,7 +441,7 @@ function addFastForwardToggleButton() {
     blurBtn.appendChild(blurIcon);
 
     blurBtn.addEventListener("click", () => {
-        if (!editorBlurState.isBlurred) {
+        if (!editorState.isBlurred) {
             toggleEditorBlur();
         }
     });
@@ -465,12 +464,12 @@ export function initFastForwardMode() {
         let targetNode = getFastForwardTargetNode();
 
         // Sync CapsLock state with Fast Forward Mode enabled state
-        // if (capsLockOn !== fastForwardState.enabled && targetNode) {
-        //     fastForwardState.enabled = capsLockOn;
+        // if (capsLockOn !== editorState.fastForwardModeOn && targetNode) {
+        //     editorState.fastForwardModeOn = capsLockOn;
         //     const toggleBtn = document.querySelector(".fast-forward-mode-toggle");
         //     if (toggleBtn) {
         //         const style = toggleBtn.style;
-        //         if (fastForwardState.enabled) {
+        //         if (editorState.fastForwardModeOn) {
         //             style.opacity = "1";
         //             style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
         //         } else {
@@ -478,12 +477,12 @@ export function initFastForwardMode() {
         //             style.boxShadow = "none";
         //         }
         //     }
-        //     console.log("[slowargo.js] Fast Forward Mode:", fastForwardState.enabled ? "enabled" : "disabled");
+        //     console.log("[slowargo.js] Fast Forward Mode:", editorState.fastForwardModeOn ? "enabled" : "disabled");
         // }
 
-        if (editorBlurState.isBlurred) {
+        if (editorState.isBlurred) {
             // 进入 blur 模式后可能选了其他节点，让 targetNode 有值走后面的 Escape 键处理函数，退出 blur 模式
-            targetNode = fastForwardState.sourceNodeId;
+            targetNode = app.graph.getNodeById(editorState.sourceNodeId);
         }
 
         if (!targetNode) return;
@@ -502,7 +501,7 @@ export function initFastForwardMode() {
         }
 
         // In blur mode, let all keyboard events pass through to main UI
-        if (editorBlurState.isBlurred) return;
+        if (editorState.isBlurred) return;
 
         // Ctrl+L loads clipspace content into current editor
         if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
@@ -515,8 +514,8 @@ export function initFastForwardMode() {
 
         // Enter executes Fast Forward cycle if enabled and mask is not empty
         if (e.key !== 'Enter') return;
-        if (!fastForwardState.enabled) return;
-        if (fastForwardState.active) return;
+        if (!editorState.fastForwardModeOn) return;
+        if (editorState.cycleInProgress) return;
 
         if (!isMaskNonEmpty()) {
             console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
@@ -555,7 +554,7 @@ export function initFastForwardMode() {
             const editor = document.querySelector(".mask-editor-dialog");
             if (editor && !editor.dataset.blurListenerAdded) {
                 editor.addEventListener('click', (e) => {
-                    if (editorBlurState.isBlurred) {
+                    if (editorState.isBlurred) {
                         // Check if clicked on button or control - don't toggle
                         const button = e.target.closest('button, input[type="color"], input[type="range"]');
                         if (!button) {
