@@ -128,9 +128,11 @@ keyboard?.removeListeners()    // ✅ 移除监听器
 ```
 **状态**: ✅ 正确清理
 
-## ❌ 未清理的资源
+## ❌ 未清理的资源（重新评估后）
 
-### 1. Brush Texture Cache
+经过详细分析，所有资源都已正确处理：
+
+### 1. Brush Texture Cache ✅
 **位置**: `useBrushDrawing.ts`
 ```typescript
 const brushTextureCache = new QuickLRU<string, HTMLCanvasElement>({
@@ -138,101 +140,101 @@ const brushTextureCache = new QuickLRU<string, HTMLCanvasElement>({
 })
 ```
 
-**问题**:
-- 缓存中存储了最多 20 个 canvas 元素
-- 在 `onUnmounted()` 和 `destroy()` 中都没有清理
-- 每个 canvas 可能占用几百 KB 到几 MB
+**分析**: 
+- `brushTextureCache` 是 `useBrushDrawing` 的局部变量
+- 当 `useToolManager` 实例销毁时，cache 引用也会断开
+- QuickLRU 和其中的 canvas 都是普通 JS 对象，没有持有系统资源
 
-**影响**:
-- 如果多次打开/关闭 mask editor，缓存会累积
-- QuickLRU 会自动淘汰旧条目，但不会主动清理 canvas 内存
+**结论**: ✅ **不需要手动清理**
+- 编辑器关闭后会自动被 GC 回收
+- 不会造成内存泄漏
 
-**建议修复**:
+### 2. BaseImage 引用链 ✅
+**位置**: 多个位置
 ```typescript
-onUnmounted(() => {
-  // ... 现有清理代码 ...
-  
-  // 清理笔刷纹理缓存
-  brushTextureCache.clear()
-})
-```
+// useMaskEditorLoader.ts - 创建
+const baseImage = new Image()
 
-### 2. DataStore 中的 Image 引用
-**位置**: `maskEditorDataStore.ts` - `reset()`
-```typescript
-const reset = () => {
-  inputData.value = null      // ⚠️ 只是设为 null
-  outputData.value = null
-  sourceNode.value = null
-  // ...
+// useImageLoader.ts - 存储
+store.image = baseImage
+
+// maskEditorStore.ts - 清理
+if (image.value) {
+  image.value.src = ''  // ✅ 清空解码位图
+  image.value = null
 }
 ```
 
-**问题**:
-- `inputData` 包含 `baseLayer.image`, `maskLayer.image`, `paintLayer?.image`
-- 这些 Image 对象的 `src` 没有被清空
-- 虽然引用被设为 null，但如果其他地方还持有引用，解码位图不会释放
+**清理路径**:
+1. `useImageLoader.ts` 清理了 `maskImage.src` 和 `paintImage.src`
+2. `baseImage` 存储在 `store.image`，在 `resetState()` 中清理
+3. `dataStore.reset()` 设置 `inputData = null`
 
-**当前状态**:
-- `useImageLoader.ts` 中已经清理了 `maskImage.src` 和 `paintImage.src`
-- 但 `baseImage.src` 没有被清理（因为它被存储在 `store.image` 中）
-- `store.image` 在 `resetState()` 中被清理了
+**清理顺序**（`MaskEditorContent.vue` - `onBeforeUnmount()`）:
+```typescript
+store.resetState()    // 先清理 store.image.src
+dataStore.reset()     // 后清理 inputData
+```
 
-**结论**: ⚠️ 基本正确，但依赖清理顺序
+**结论**: ✅ **已正确清理**
+- 清理顺序正确
+- `baseImage.src` 会被清空，释放解码位图
+- 所有引用断开后会被 GC 回收
 
-### 3. OutputData 中的 Canvas 和 Blob
-**位置**: `maskEditorDataStore.ts`
+### 3. OutputData 中的 Canvas 和 Blob ✅
+
+**Canvas 清理**:
+```typescript
+// useMaskEditorSaver.ts - save() 函数中
+function cleanupTemporaryCanvases(outputData: EditorOutputData): void {
+  const canvases = [
+    outputData.maskedImage.canvas,
+    outputData.paintLayer.canvas,
+    outputData.paintedImage.canvas,
+    outputData.paintedMaskedImage.canvas
+  ]
+  for (const canvas of canvases) {
+    if (canvas) {
+      canvas.width = 0  // ✅ 已清理
+      canvas.height = 0
+    }
+  }
+}
+```
+
+**结论**: ✅ **Canvas 已正确清理**
+
+**Blob 分析**:
 ```typescript
 interface EditorOutputLayer {
-  canvas: HTMLCanvasElement  // ⚠️ 未清理
-  blob: Blob                 // ⚠️ 未清理
+  canvas: HTMLCanvasElement  // ✅ 已清理
+  blob: Blob                 // Blob 是普通 JS 对象
   ref: ImageRef
 }
 ```
 
-**问题**:
-- `outputData` 包含 4 个 `EditorOutputLayer`
-- 每个包含一个 canvas 和 blob
-- `reset()` 只是设为 null，没有清空 canvas
+**Blob 内存占用**:
+- 对于 2048×2048 图像：8-40 MB（4 个 PNG blob）
+- 在上传后不再需要，但保留到编辑器关闭
+- Blob 是普通 JavaScript 对象，没有持有文件句柄等系统资源
 
-**建议修复**:
-```typescript
-const reset = () => {
-  // 清理 output canvas
-  if (outputData.value) {
-    const layers = [
-      outputData.value.maskedImage,
-      outputData.value.paintLayer,
-      outputData.value.paintedImage,
-      outputData.value.paintedMaskedImage
-    ]
-    layers.forEach(layer => {
-      if (layer?.canvas) {
-        layer.canvas.width = 0
-        layer.canvas.height = 0
-      }
-    })
-  }
-  
-  inputData.value = null
-  outputData.value = null
-  // ...
-}
-```
+**结论**: ✅ **Blob 不需要手动清理**
+- `dataStore.reset()` 后引用断开，GC 会自动回收
+- 不会造成内存泄漏
 
 ## 总结
 
-### 清理完整性评分: 85/100
+### 清理完整性评分: 90/100
 
 **优点**:
-- 主要的大对象（GPU 资源、主 canvas、history）都有正确清理
+- 主要的大对象（GPU 资源、主 canvas、history、output canvas）都有正确清理
 - 清理逻辑集中且有序
 - 使用了 Vue 的生命周期钩子
+- Output canvas 已在 cleanupTemporaryCanvases() 中主动清理
 
 **需要改进**:
-1. **高优先级**: 清理 brush texture cache
-2. **中优先级**: 清理 outputData 中的 canvas
-3. **低优先级**: 确保 image 清理顺序的健壮性
+1. **低优先级**: 清理 brush texture cache（自动淘汰，优先级不高）
+2. **低优先级**: 确保 image 清理顺序的健壮性
 
 ### 内存泄漏风险评估
 
@@ -240,8 +242,8 @@ const reset = () => {
 - **主 Canvas**: ✅ 无风险
 - **History**: ✅ 无风险
 - **Brush Cache**: ⚠️ 低风险（自动淘汰，但不主动清理）
-- **Output Canvas**: ⚠️ 中风险（如果保存后未清理）
-- **Image 对象**: ✅ 基本无风险
+- **Output Canvas**: ✅ 无风险（已在 cleanupTemporaryCanvases() 中清理）
+- **Image 对象**: ✅ 无风险
 
 ### 建议的清理顺序
 
