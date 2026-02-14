@@ -620,7 +620,8 @@ export function initFastForwardMode() {
         // const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
         // const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
         const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
-        if (refBtn && !document.querySelector(".fast-forward-mode-toggle")) {
+        const refPanel = document.querySelector("div.maskEditor_sidePanel input[type=color]");
+        if (refBtn && refPanel && !document.querySelector(".fast-forward-mode-toggle")) {
             // Mask editor just opened, add toggle and restore color
             // setTimeout(() => {
             //     restoreColorAndAddToggle();
@@ -657,7 +658,7 @@ export function initFastForwardMode() {
     // Start observing document for changes
     observer.observe(document.body, {
         childList: true,
-        subtree: false,
+        subtree: true,
         attributes: false,
         characterData: false
     });
