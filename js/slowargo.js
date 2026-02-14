@@ -3,12 +3,9 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
 import { initFastForwardMode, performMaskSave } from "./maskEditorTurbo.js";
+import { loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath } from "./utils.js";
 
-// Load CSS dynamically
-const link = document.createElement("link");
-link.rel = "stylesheet";
-link.href = new URL("./slowargo.css", import.meta.url).href;
-document.head.appendChild(link);
+loadCSS(import.meta.url, "./slowargo.css");
 
 app.registerExtension({
     name: "slowargo.js.extension",
@@ -807,108 +804,3 @@ app.registerExtension({
         return [];
     }
 })
-
-function getComfyFilePathFromViewUrl(url) {
-    try {
-        const urlObj = new URL(url);
-        const params = urlObj.searchParams;
-
-        const type = params.get('type') || 'output';           // 默认 output
-        const filename = params.get('filename');
-        let subfolder = params.get('subfolder') || '';         // 可能为空
-
-        if (!filename) {
-            throw new Error("URL 中缺少 filename 参数");
-        }
-
-        // 拼接，subfolder 为空时自动处理双斜杠
-        const path = [type, subfolder, filename]
-            .filter(part => part !== undefined && part !== null && part !== '')
-            .join('/')
-            .replace(/\/+/g, '/');  // 防止多余斜杠
-
-        return path;
-    } catch (err) {
-        console.error("[getComfyFilePath] 解析失败:", err);
-        return null;
-    }
-}
-
-function updateNodePreview(node, imageName) {
-    if (!imageName || !node) return;
-    // 如果 value 是 clipspace，annotation 切成 input
-    // 解析路径，如果父目录为 clipspace，替换文件名末尾的 [output] 为 [input]
-    // let processedValue = imageName;
-    // const pathParts = imageName.split('/');
-    // if (pathParts.length >= 2 && pathParts[pathParts.length - 2] === "clipspace") {
-    //     // 检查文件名是否以 [output] 结尾
-    //     if (pathParts[pathParts.length - 1].endsWith("[output]")) {
-    //         pathParts[pathParts.length - 1] = pathParts[pathParts.length - 1].replace("[output]", "[input]");
-    //         processedValue = pathParts.join('/');
-    //     }
-    // }
-    let { filename, subfolder } = parseFilePath(imageName)
-
-    // 检查子文件夹是否为 "clipspace"
-    if (subfolder === "clipspace") {
-        // 检查文件名是否以 [output] 结尾
-        if (filename.endsWith("[output]")) {
-            // const newFilename = filename.replace("[output]", "[input]")
-            // // 重新组合路径
-            // processedValue =  subfolder ? `${subfolder}/${newFilename}` : newFilename
-            filename = filename.replace("[output]", "[input]")
-        }
-    }
-
-    console.log("[slowargo.js] updateNodePreview", imageName, subfolder, filename);
-    imageName = filename;
-
-    // Release old image if exists
-    if (node.imgs?.[0]?.src) {
-        node.imgs[0].src = '';
-    }
-
-    const img = new Image();
-    img.onload = () => {
-        node.imgs = [img];
-        app.graph.setDirtyCanvas(true);
-    };
-
-    img.onerror = () => {
-        console.warn(`Failed to load preview for ${imageName}`, node);
-    };
-
-    // Get the input directory path
-    const inputPathWidget = node.widgets?.find(w => w.name === "input_path");
-    const inputPath = inputPathWidget?.value || "";
-
-    // Construct URL with proper path handling
-    //const params = `&type=input${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
-    const params = `${app.getPreviewFormatParam?.() || ""}${app.getRandParam?.() || ""}`;
-
-    // Use the thumbnail name directly since it's already in the input directory
-    img.src = api.apiURL(`/view?filename=${encodeURIComponent(imageName)}${subfolder ? `&subfolder=${encodeURIComponent(subfolder)}` : ''}&type=output${params}`);
-}
-
-function parseFilePath(filepath) {
-    if (!filepath?.trim()) return { filename: '', subfolder: '' }
-
-    const normalizedPath = filepath
-      .replace(/[\\/]+/g, '/') // Normalize path separators
-      .replace(/^\//, '') // Remove leading slash
-      .replace(/\/$/, '') // Remove trailing slash
-
-    const lastSlashIndex = normalizedPath.lastIndexOf('/')
-
-    if (lastSlashIndex === -1) {
-        return {
-            filename: normalizedPath,
-            subfolder: ''
-        }
-    }
-
-    return {
-        filename: normalizedPath.slice(lastSlashIndex + 1),
-        subfolder: normalizedPath.slice(0, lastSlashIndex)
-    }
-}

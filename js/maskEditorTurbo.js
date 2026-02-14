@@ -1,43 +1,9 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { loadCSS, sleep, getKeybindingStore, getMaskEditorStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
 
-// Load CSS dynamically
-const link = document.createElement("link");
-link.rel = "stylesheet";
-link.href = new URL("./maskEditorTurbo.css", import.meta.url).href;
-document.head.appendChild(link);
-
-// === Mask Blur Toggle Hotkey ===
-// Read actual keybindings from ComfyUI's Pinia keybindingStore,
-// so user-modified keybindings are respected.
-function getKeybindingStore() {
-    try {
-        const vueApp = document.querySelector('#vue-app')?.__vue_app__;
-        if (!vueApp) return null;
-        const pinia = vueApp.config.globalProperties?.$pinia;
-        if (!pinia?._s) return null;
-        return pinia._s.get('keybinding') || null;
-    } catch (e) {
-        return null;
-    }
-}
-
-function eventMatchesCommand(event, commandId) {
-    const store = getKeybindingStore();
-    if (!store) return false;
-    const bindings = store.getKeybindingsByCommandId(commandId);
-    for (const binding of bindings) {
-        const combo = binding.combo;
-        if (combo.key.toUpperCase() === event.key.toUpperCase() &&
-            combo.ctrl === (event.ctrlKey || event.metaKey) &&
-            combo.alt === event.altKey &&
-            combo.shift === event.shiftKey) {
-            return true;
-        }
-    }
-    return false;
-}
+loadCSS(import.meta.url, "./maskEditorTurbo.css");
 
 // === Editor State ===
 const editorState = {
@@ -60,19 +26,6 @@ const colorMemory = {
         return localStorage.getItem(this.key);
     }
 };
-
-// === Access Pinia Store for GPU Sync ===
-function getMaskEditorStore() {
-    try {
-        const vueApp = document.querySelector('#vue-app')?.__vue_app__;
-        if (!vueApp) return null;
-        const pinia = vueApp.config.globalProperties?.$pinia;
-        if (!pinia?._s) return null;
-        return pinia._s.get('maskEditor') || null;
-    } catch (e) {
-        return null;
-    }
-}
 
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor(reloadMaskOnly = false) {
@@ -172,10 +125,6 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
 }
 // === Fast Forward Mode Helper Functions ===
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 // === Editor Blur Toggle ===
 function toggleEditorBlur() {
     editorState.isBlurred = !editorState.isBlurred;
@@ -221,25 +170,6 @@ function getFastForwardTargetNode() {
         return null;
     }
     return selectedNode;
-}
-
-function isMaskNonEmpty() {
-    const canvases = document.querySelectorAll("#maskEditorCanvasContainer canvas");
-    if (canvases.length < 3) return false;
-
-    const maskCanvas = canvases[2]; // z-30, the mask layer
-    const ctx = maskCanvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return false;
-
-    const imageData = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-    const data = imageData.data;
-
-    // Sample every 16th pixel for performance
-    const step = 4 * 16;
-    for (let i = 3; i < data.length; i += step) {
-        if (data[i] > 0) return true;
-    }
-    return false;
 }
 
 async function performMaskSave() {
