@@ -663,6 +663,7 @@ app.registerExtension({
                     popup.close = () => {
                         window.removeEventListener("keydown", handleEsc);
                         window.removeEventListener("click", handleClickOutside); // 移除点击外部监听
+                        listContainer.innerHTML = ""; // Clear existing content
                         originalClose.apply(popup);
                     };
 
