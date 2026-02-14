@@ -133,8 +133,10 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         }
 
         console.log("[slowargo.js] Clipspace loaded successfully");
+        return data.image_name[0]; // Return clipspace filename for skip-save optimization
     } catch (error) {
         console.error("[slowargo.js] Failed to load clipspace:", error);
+        return null;
     }
 }
 // === Fast Forward Mode Helper Functions ===
@@ -271,12 +273,29 @@ function waitForExecutionComplete(timeoutMs = 120000) {
     });
 }
 
-async function executeFastForwardCycle(targetNode) {
+async function executeFastForwardCycle(targetNode, skipSaveWithClipspace = null) {
     editorState.cycleInProgress = true;
 
     try {
-        console.log("[slowargo.js] Fast Forward Mode: Saving mask...");
-        await performMaskSave();
+        if (skipSaveWithClipspace) {
+            // Reload All + Shift: clipspace files already on disk, skip redundant save.
+            // Just save color, update widget to existing clipspace file, and close editor.
+            console.log("[slowargo.js] Fast Forward Mode: Skipping save, using existing clipspace:", skipSaveWithClipspace);
+            const colorInput = document.querySelector("div.maskEditor_sidePanel input[type=color]");
+            if (colorInput?.value) colorMemory.save(colorInput.value);
+
+            const imageWidget = targetNode.widgets?.find(w => w.name === 'image');
+            if (imageWidget) {
+                imageWidget.value = skipSaveWithClipspace;
+            }
+
+            // Close editor without saving (click Cancel button)
+            const cancelBtn = document.querySelector("#global-mask-editor button:has(i.pi-times)");
+            if (cancelBtn) cancelBtn.click();
+        } else {
+            console.log("[slowargo.js] Fast Forward Mode: Saving mask...");
+            await performMaskSave();
+        }
 
         // Wait for editor to close completely
         console.log("[slowargo.js] Fast Forward Mode: Waiting for editor to close...");
@@ -409,12 +428,12 @@ function addFastForwardToggleButton() {
     reloadAllBtn.appendChild(reloadAllText);
 
     reloadAllBtn.addEventListener("click", async (e) => {
-        await loadClipspaceToEditor(false);
+        const clipspaceFilename = await loadClipspaceToEditor(false);
         if (e.shiftKey) {
             const targetNode = app.graph.getNodeById(editorState.sourceNodeId);//getFastForwardTargetNode();
             if (targetNode && editorState.fastForwardModeOn) {
-                console.log("[slowargo.js] Shift+Reload triggered, executing Fast Forward cycle");
-                await executeFastForwardCycle(targetNode);
+                console.log("[slowargo.js] Shift+Reload All triggered, executing Fast Forward cycle (skip save)");
+                await executeFastForwardCycle(targetNode, clipspaceFilename);
             }
         }
     });
