@@ -8,6 +8,37 @@ link.rel = "stylesheet";
 link.href = new URL("./maskEditorTurbo.css", import.meta.url).href;
 document.head.appendChild(link);
 
+// === Mask Blur Toggle Hotkey ===
+// Read actual keybindings from ComfyUI's Pinia keybindingStore,
+// so user-modified keybindings are respected.
+function getKeybindingStore() {
+    try {
+        const vueApp = document.querySelector('#vue-app')?.__vue_app__;
+        if (!vueApp) return null;
+        const pinia = vueApp.config.globalProperties?.$pinia;
+        if (!pinia?._s) return null;
+        return pinia._s.get('keybinding') || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function eventMatchesCommand(event, commandId) {
+    const store = getKeybindingStore();
+    if (!store) return false;
+    const bindings = store.getKeybindingsByCommandId(commandId);
+    for (const binding of bindings) {
+        const combo = binding.combo;
+        if (combo.key.toUpperCase() === event.key.toUpperCase() &&
+            combo.ctrl === (event.ctrlKey || event.metaKey) &&
+            combo.alt === event.altKey &&
+            combo.shift === event.shiftKey) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // === Editor State ===
 const editorState = {
     // Fast Forward Mode
@@ -534,6 +565,14 @@ export function initFastForwardMode() {
 
         if (!targetNode) return;
 
+        // Toggle blur mode when user presses the keybinding for Comfy.MaskEditor.OpenMaskEditor command
+        if (eventMatchesCommand(e, 'Comfy.MaskEditor.OpenMaskEditor')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleEditorBlur();
+            return;
+        }
+
         // Esc key toggles blur mode (intercept before blur mode pass-through)
         if (e.key === 'Escape') {
             // If mask is empty, let dialog close naturally
@@ -624,5 +663,5 @@ export function initFastForwardMode() {
     });
 }
 
-// Export performMaskSave for use in maskeditor.save command
+// Export for use in slowargo.js
 export { performMaskSave, toggleEditorBlur };
