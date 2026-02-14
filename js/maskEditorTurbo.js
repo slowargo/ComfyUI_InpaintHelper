@@ -534,6 +534,8 @@ function addFastForwardToggleButton() {
 
 // === Fast Forward Mode Initialization ===
 export function initFastForwardMode() {
+    let initialized = false; // 标志位：是否已初始化当前 editor
+
     // Sync Fast Forward Mode with CapsLock state (CapsLock ON = Fast Forward ON, OFF = Fast Forward OFF)
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
@@ -615,50 +617,70 @@ export function initFastForwardMode() {
         await executeFastForwardCycle(targetNode);
     }, true);
 
-    // Monitor mask editor container to detect opening (handles all open methods)
-    const observer = new MutationObserver(() => {
-        // const maskEditorPanel = document.querySelector("div.maskEditor_sidePanel");
-        // const refBtn = document.querySelector("#global-mask-editor button:has(i.pi-check)");
-        const refBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
-        const refPanel = document.querySelector("div.maskEditor_sidePanel input[type=color]");
-        if (refBtn && refPanel && !document.querySelector(".fast-forward-mode-toggle")) {
-            // Mask editor just opened, add toggle and restore color
-            // setTimeout(() => {
-            //     restoreColorAndAddToggle();
-            // }, 100);
+    // Two-phase observer for detecting mask editor opening
+    // Phase 1: Monitor body direct children for p-dialog-mask appearance/removal (cheap)
+    // Phase 2: Once dialog found, monitor its subtree for side panel readiness (scoped)
+    function onEditorReady(dialog) {
+        initialized = true;
+        restoreColorAndAddToggle();
 
-            // restoreColorAndAddToggle会最大化对话框，临时断开 observer，执行完操作后再重新连接
-            // observer.disconnect();
-            restoreColorAndAddToggle();
-            // observer.observe(document.body, {
-            //     childList: true,
-            //     subtree: true,
-            //     attributes: false,
-            //     characterData: false
-            // });
-
-            // Add click listener to toggle blur state when clicking on blurred editor
-            const editor = document.querySelector(".mask-editor-dialog");
-            if (editor && !editor.dataset.blurListenerAdded) {
-                editor.addEventListener('click', (e) => {
-                    if (editorState.isBlurred) {
-                        // Check if clicked on button or control - don't toggle
-                        const button = e.target.closest('button, input[type="color"], input[type="range"]');
-                        if (!button) {
-                            e.stopImmediatePropagation();
-                            toggleEditorBlur();
-                        }
+        // Add click listener to toggle blur state when clicking on blurred editor
+        if (!dialog.dataset.blurListenerAdded) {
+            dialog.addEventListener('click', (e) => {
+                if (editorState.isBlurred) {
+                    const button = e.target.closest('button, input[type="color"], input[type="range"]');
+                    if (!button) {
+                        e.stopImmediatePropagation();
+                        toggleEditorBlur();
                     }
-                });
-                editor.dataset.blurListenerAdded = 'true';
+                }
+            });
+            dialog.dataset.blurListenerAdded = 'true';
+        }
+    }
+
+    function waitForSidePanel(dialog) {
+        // Check if already ready (synchronous fast path)
+        const refPanel = dialog.querySelector("div.maskEditor_sidePanel input[type=color]");
+        if (refPanel && !document.querySelector(".fast-forward-mode-toggle")) {
+            onEditorReady(dialog);
+            return;
+        }
+
+        // Not ready yet — watch dialog subtree until side panel renders
+        const innerObserver = new MutationObserver(() => {
+            const refPanel = dialog.querySelector("div.maskEditor_sidePanel input[type=color]");
+            if (refPanel && !document.querySelector(".fast-forward-mode-toggle")) {
+                innerObserver.disconnect();
+                onEditorReady(dialog);
             }
+        });
+        innerObserver.observe(dialog, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // Phase 1: Only watch body direct children — triggers when p-dialog-mask is added/removed
+    const observer = new MutationObserver(() => {
+        const dialog = document.querySelector("body > .p-dialog-mask .mask-editor-dialog");
+
+        if (!dialog && initialized) {
+            // Editor closed — reset flag so next open re-initializes
+            initialized = false;
+            return;
+        }
+
+        if (dialog && !initialized) {
+            // Editor opened — start phase 2 to wait for side panel
+            waitForSidePanel(dialog);
         }
     });
 
     // Start observing document for changes
     observer.observe(document.body, {
         childList: true,
-        subtree: true,
+        subtree: false,
         attributes: false,
         characterData: false
     });
