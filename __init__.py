@@ -550,7 +550,7 @@ class RefreshTriggerV1:
 
     @staticmethod
     def IS_CHANGED(trigger, watch_folders=""):
-        return 0
+        return watch_folders
 
 class LoadImageFromAnyPath:
     @classmethod
@@ -983,8 +983,8 @@ class ClearHistoryNode(io.ComfyNode):
     def execute(cls, auto_clear: bool = True) -> io.NodeOutput:
         return io.NodeOutput()
 
-    @staticmethod
-    def IS_CHANGED(auto_clear: bool = True):
+    @classmethod
+    def IS_CHANGED(cls, auto_clear: bool = True):
         return auto_clear
 
 ##############################################
