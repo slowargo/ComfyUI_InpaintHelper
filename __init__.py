@@ -548,6 +548,10 @@ class RefreshTriggerV1:
     def execute(self, trigger, watch_folders=""):
         return {}
 
+    @staticmethod
+    def IS_CHANGED(trigger, watch_folders=""):
+        return 0
+
 class LoadImageFromAnyPath:
     @classmethod
     def INPUT_TYPES(cls):
@@ -956,6 +960,27 @@ class RunButtonNode:
         # print(f"按钮被点击了！当前触发次数: {trigger_count}")
         return trigger_count
 
+class ClearHistoryNode(io.ComfyNode):
+    """Clear canvas editing history"""
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="ClearHistoryNode",
+            display_name="Clear History",
+            category="Slowargo",
+            inputs=[],
+            outputs=[],
+        )
+
+    @classmethod
+    def execute(cls) -> io.NodeOutput:
+        return io.NodeOutput()
+
+    @staticmethod
+    def IS_CHANGED():
+        return 0
+
 ##############################################
 
 # Set the web directory, any .js file in that directory will be loaded by the frontend as a frontend extension
@@ -1115,6 +1140,7 @@ NODE_CLASS_MAPPINGS = {
     "RememberStrings": RememberStrings,
     "RunButtonNode": RunButtonNode,
     "RefreshTriggerV1": RefreshTriggerV1,
+    "ClearHistoryNode": ClearHistoryNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1127,4 +1153,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RememberStrings": "Remember Recent Strings",
     "RunButtonNode": "Run Button",
     "RefreshTriggerV1": "Refresh Trigger",
+    "ClearHistoryNode": "Clear History",
 }

@@ -136,6 +136,18 @@ export function getMaskEditorStore() {
     }
 }
 
+export function getWorkflowStore() {
+    try {
+        const vueApp = document.querySelector('#vue-app')?.__vue_app__;
+        if (!vueApp) return null;
+        const pinia = vueApp.config.globalProperties?.$pinia;
+        if (!pinia?._s) return null;
+        return pinia._s.get('workflow') || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // === Keybinding Utilities ===
 
 export function eventMatchesCommand(event, commandId) {

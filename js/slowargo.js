@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
 import { initFastForwardMode, performMaskSave } from "./maskEditorTurbo.js";
-import { loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath } from "./utils.js";
+import { loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath, getWorkflowStore } from "./utils.js";
 
 loadCSS(import.meta.url, "./slowargo.css");
 
@@ -680,6 +680,25 @@ app.registerExtension({
                 }
                 return result;
             }
+        } else if (nodeType?.comfyClass === "ClearHistoryNode") {
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+
+            nodeType.prototype.onNodeCreated = function() {
+                const result = origOnNodeCreated?.apply(this, arguments);
+
+                this.addWidget("button", "clear_history", "Clear History", () => {
+                    const tracker = getWorkflowStore()?.activeWorkflow?.changeTracker;
+                    if (tracker) {
+                        tracker.undoQueue.length = 0;
+                        tracker.redoQueue.length = 0;
+                        console.log("[ClearHistoryNode] History cleared");
+                    } else {
+                        console.warn("[ClearHistoryNode] changeTracker not found");
+                    }
+                });
+
+                return result;
+            };
         }
 
         // console.log("[slowargo.js] init done", nodeType?.comfyClass)
