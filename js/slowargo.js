@@ -685,8 +685,10 @@ app.registerExtension({
 
             nodeType.prototype.onNodeCreated = function() {
                 const result = origOnNodeCreated?.apply(this, arguments);
+                const node = this;
 
-                this.addWidget("button", "clear_history", "Clear History", () => {
+                // Helper function to clear history
+                const doClearHistory = () => {
                     const tracker = getWorkflowStore()?.activeWorkflow?.changeTracker;
                     if (tracker) {
                         tracker.undoQueue.length = 0;
@@ -695,7 +697,32 @@ app.registerExtension({
                     } else {
                         console.warn("[ClearHistoryNode] changeTracker not found");
                     }
-                });
+                };
+
+                // Manual clear button
+                this.addWidget("button", "clear_history", "Clear History", doClearHistory);
+
+                // Register global auto-clear handler (only once)
+                if (!window.slowargo_clear_history_handler_registered) {
+                    window.slowargo_clear_history_handler_registered = true;
+
+                    api.addEventListener("execution_success", (event) => {
+                        // Find all ClearHistoryNode instances with auto_clear enabled
+                        app.graph._nodes?.forEach((node) => {
+                            if (node.comfyClass === "ClearHistoryNode") {
+                                const autoClearWidget = node.widgets?.find(w => w.name === "auto_clear");
+                                if (autoClearWidget?.value) {
+                                    const tracker = getWorkflowStore()?.activeWorkflow?.changeTracker;
+                                    if (tracker) {
+                                        tracker.undoQueue.length = 0;
+                                        tracker.redoQueue.length = 0;
+                                        console.log(`[ClearHistoryNode] Auto-cleared on execution success (node ${node.id})`);
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }
 
                 return result;
             };

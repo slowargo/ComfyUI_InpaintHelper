@@ -969,17 +969,23 @@ class ClearHistoryNode(io.ComfyNode):
             node_id="ClearHistoryNode",
             display_name="Clear History",
             category="Slowargo",
-            inputs=[],
+            inputs=[
+                io.Boolean.Input(
+                    "auto_clear",
+                    default=True,
+                    display_name="Auto Clear on Execute"
+                ),
+            ],
             outputs=[],
         )
 
     @classmethod
-    def execute(cls) -> io.NodeOutput:
+    def execute(cls, auto_clear: bool = True) -> io.NodeOutput:
         return io.NodeOutput()
 
     @staticmethod
-    def IS_CHANGED():
-        return 0
+    def IS_CHANGED(auto_clear: bool = True):
+        return auto_clear
 
 ##############################################
 
