@@ -156,6 +156,7 @@ function toggleEditorBlur() {
 
 function getFastForwardTargetNode() {
     // 使用 open_maskeditor 打开 mask editor 时。兜底值，不一定是当前选择的节点
+    // 打开 editor 后我把 clipspace_return_node 置空了，这里应该也用不上了
     let selectedNode = ComfyApp.clipspace_return_node;
 
     // 使用 commandStore.execute('Comfy.MaskEditor.OpenMaskEditor') 打开 mask editor 时。最常用打开方式，优先使用
@@ -342,6 +343,24 @@ function restoreColorAndAddToggle() {
 
 }
 
+function cleanupFastForwardUI(dialog) {
+    if (!dialog) return;
+
+    // Remove button container from the dialog
+    const buttonContainer = dialog.querySelector(".ff-mode-button-container");
+    if (buttonContainer) {
+        buttonContainer.innerHTML = '';
+        buttonContainer.parentNode?.removeChild(buttonContainer);
+    }
+
+    // Clear dialog reference and dataset to aid garbage collection
+    if (dialog.dataset.blurListenerAdded) {
+        delete dialog.dataset.blurListenerAdded;
+    }
+
+    console.log("[slowargo.js] Cleaned up Fast Forward UI elements");
+}
+
 function addFastForwardToggleButton() {
     // Check if toggle already exists
     if (document.querySelector(".fast-forward-mode-toggle")) {
@@ -465,6 +484,8 @@ function addFastForwardToggleButton() {
 // === Fast Forward Mode Initialization ===
 export function initFastForwardMode() {
     let initialized = false; // 标志位：是否已初始化当前 editor
+    let dialogClickHandler = null;
+    let currentDialog = null;
 
     // Sync Fast Forward Mode with CapsLock state (CapsLock ON = Fast Forward ON, OFF = Fast Forward OFF)
     window.addEventListener('keydown', async function(e) {
@@ -552,11 +573,12 @@ export function initFastForwardMode() {
     // Phase 2: Once dialog found, monitor its subtree for side panel readiness (scoped)
     function onEditorReady(dialog) {
         initialized = true;
+        currentDialog = dialog;
         restoreColorAndAddToggle();
 
         // Add click listener to toggle blur state when clicking on blurred editor
         if (!dialog.dataset.blurListenerAdded) {
-            dialog.addEventListener('click', (e) => {
+            dialogClickHandler = (e) => {
                 if (editorState.isBlurred) {
                     const button = e.target.closest('button, input[type="color"], input[type="range"]');
                     if (!button) {
@@ -564,7 +586,8 @@ export function initFastForwardMode() {
                         toggleEditorBlur();
                     }
                 }
-            });
+            };
+            dialog.addEventListener('click', dialogClickHandler);
             dialog.dataset.blurListenerAdded = 'true';
         }
     }
@@ -596,8 +619,22 @@ export function initFastForwardMode() {
         const dialog = document.querySelector("body > .p-dialog-mask .mask-editor-dialog");
 
         if (!dialog && initialized) {
-            // Editor closed — reset flag so next open re-initializes
+            // Editor closed — cleanup resources
             initialized = false;
+            console.log("[slowargo.js] Mask editor closed, cleaning up resources");
+
+            // Remove click listener from dialog
+            if (currentDialog && dialogClickHandler) {
+                currentDialog.removeEventListener('click', dialogClickHandler);
+                dialogClickHandler = null;
+            }
+
+            // Cleanup UI elements
+            cleanupFastForwardUI(currentDialog);
+            currentDialog.querySelectorAll('canvas').forEach(c => { c.width = 0; c.height = 0; c.parentNode?.removeChild(c);});
+            currentDialog.querySelectorAll('img').forEach(c => { c.src = '';c.parentNode?.removeChild(c); })
+            currentDialog.innerHTML = "";
+            currentDialog = null;
             return;
         }
 

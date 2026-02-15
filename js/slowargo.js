@@ -382,6 +382,7 @@ app.registerExtension({
                         if (forceOpenEditor || app.shiftDown) {
                             ComfyApp.clipspace_return_node = node;
                             ComfyApp.open_maskeditor?.();
+                            ComfyApp.clipspace_return_node = null;
                         }
 
                     } catch (e) {
