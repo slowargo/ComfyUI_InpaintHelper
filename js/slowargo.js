@@ -7,6 +7,34 @@ import { loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath,
 
 loadCSS(import.meta.url, "./slowargo.css");
 
+// Pinyin search support via pinyin-pro
+// pinyinLibPromise stores the in-flight or completed Promise, null = not started yet
+let pinyinLibPromise = null;
+
+function initPinyinLib() {
+    if (pinyinLibPromise) return; // already loading or loaded, don't start again
+    pinyinLibPromise = import("https://esm.sh/pinyin-pro@3.26.0")
+        .then(module => {
+            const matchFn = module.match ?? module.default?.match;
+            if (typeof matchFn !== 'function') {
+                console.warn("[slowargo.js] pinyin-pro loaded but match function not found");
+                return null;
+            }
+            console.log("[slowargo.js] pinyin-pro loaded successfully");
+            return { match: matchFn };
+        })
+        .catch(e => {
+            console.warn("[slowargo.js] Failed to load pinyin-pro, falling back to normal search:", e);
+            return null;
+        });
+}
+
+async function getPinyinLib() {
+    return pinyinLibPromise ? await pinyinLibPromise : null;
+}
+
+const HAS_CHINESE = /[\u4e00-\u9fa5]/;
+
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
@@ -500,6 +528,8 @@ app.registerExtension({
                 return result;
             };
         } else if (nodeType?.comfyClass === "RememberStrings") {
+            // Start loading pinyin-pro early so it's ready when the user opens the popup
+            initPinyinLib();
             const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
                 const result = origOnNodeCreated?.apply(this, arguments);
@@ -548,12 +578,47 @@ app.registerExtension({
                         className: "slowargo-history-wrapper"
                     }, [searchInput, listContainer]);
 
-                    // 提取搜索过滤函数（DRY）
-                    const getFilteredEntries = () => {
-                        const query = searchInput.value.toLowerCase();
-                        return query ? entries.filter(item =>
-                            item.content.toLowerCase().includes(query)
-                        ) : entries;
+                    const getFilteredEntries = async () => {
+                        const query = searchInput.value.toLowerCase().trim();
+                        if (!query) return entries;
+
+                        const lib = await getPinyinLib();
+
+                        return entries.map(item => {
+                            const content = item.content;
+                            const contentLower = content.toLowerCase();
+                            let score = 0;
+
+                            // 精确匹配优先级最高
+                            if (contentLower === query) {
+                                score = 1000; // 完全匹配
+                            } else if (contentLower.startsWith(query)) {
+                                score = 900; // 开头匹配
+                            } else if (contentLower.includes(query)) {
+                                score = 800; // 包含匹配
+                            }
+
+                            // 拼音匹配（仅对含中文的内容，且直接字符串匹配不够高分时）
+                            if (lib && score < 800 && HAS_CHINESE.test(content)) {
+                                // 完整/前缀拼音匹配：如 "zhong"、"zhongwen" 匹配 "中文"
+                                const fullMatch = lib.match(content, query, { precision: 'medium' });
+                                if (fullMatch !== null) {
+                                    // 从头匹配得分更高
+                                    score = Math.max(score, fullMatch[0] === 0 ? 700 : 600);
+                                }
+                                // 首字母缩写匹配：如 "zw" 匹配 "中文"（fullMatch 已足够高时跳过）
+                                if (score < 700) {
+                                    const abbrMatch = lib.match(content, query, { precision: 'first' });
+                                    if (abbrMatch !== null) {
+                                        score = Math.max(score, abbrMatch[0] === 0 ? 550 : 500);
+                                    }
+                                }
+                            }
+
+                            return { ...item, score };
+                        }).filter(item => item.score > 0)
+                          .sort((a, b) => b.score - a.score)
+                          .map(({ score, ...rest }) => rest);
                     };
 
                     const renderList = (data) => {
@@ -588,7 +653,7 @@ app.registerExtension({
                                             throw new Error(`HTTP error! status: ${res.status}`);
                                         }
                                         entries = (await res.json()).entries; // 局部刷新，直接使用 nextData.entries
-                                        renderList(getFilteredEntries()); // 保持搜索状态重新渲染
+                                        renderList(await getFilteredEntries()); // 保持搜索状态重新渲染
                                     } catch (error) {
                                         console.error("[slowargo.js] Error toggling pin status:", error);
                                         alert("Error toggling pin status: " + error.message);
@@ -611,7 +676,7 @@ app.registerExtension({
                                                 throw new Error(`HTTP error! status: ${res.status}`);
                                             }
                                             entries = (await res.json()).entries; // 刷新列表，直接使用 nextData.entries
-                                            renderList(getFilteredEntries()); // 保持搜索状态重新渲染
+                                            renderList(await getFilteredEntries()); // 保持搜索状态重新渲染
                                         } catch (error) {
                                             console.error("[slowargo.js] Error deleting history entry:", error);
                                             alert("Error deleting entry: " + error.message);
@@ -629,8 +694,8 @@ app.registerExtension({
                     };
 
                     // 搜索过滤
-                    searchInput.oninput = () => {
-                        renderList(getFilteredEntries());
+                    searchInput.oninput = async () => {
+                        renderList(await getFilteredEntries());
                     };
 
                     renderList(entries);
