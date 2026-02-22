@@ -14,6 +14,21 @@ const editorState = {
 
     // Editor Blur
     isBlurred: false,       // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
+
+    // Clone Brush
+    cloneBrush: {
+        active: false,
+        hasSample: false,
+        sampleX: 0, sampleY: 0,
+        strokeStartX: 0, strokeStartY: 0,
+        lastDrawX: 0, lastDrawY: 0,
+        brushRadius: 20,
+        isDrawing: false,
+        eventsBound: false,
+        overlay: null,
+        baseCanvas: null,   // cached canvases[0]
+        paintCanvas: null,  // cached canvases[1]
+    }
 };
 
 // === Color Memory ===
@@ -26,6 +41,236 @@ const colorMemory = {
         return localStorage.getItem(this.key);
     }
 };
+
+// === Clone Brush Functions ===
+
+function displayToCanvas(canvas, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        cx: (clientX - rect.left) * canvas.width  / rect.width,
+        cy: (clientY - rect.top)  * canvas.height / rect.height,
+    };
+}
+
+function initCloneBrushOverlay() {
+    const container = document.querySelector('#maskEditorCanvasContainer');
+    if (!container || container.querySelector('#clone-brush-overlay')) return;
+
+    // Ensure container is the positioning context for the absolute-positioned overlay
+    if (getComputedStyle(container).position === 'static') {
+        container.style.position = 'relative';
+    }
+
+    // Cache the original canvas references before appending overlay
+    const canvases = container.querySelectorAll('canvas');
+    editorState.cloneBrush.baseCanvas  = canvases[0];
+    editorState.cloneBrush.paintCanvas = canvases[1];
+
+    const overlay = document.createElement('canvas');
+    overlay.id = 'clone-brush-overlay';
+    overlay.width  = canvases[0].width;
+    overlay.height = canvases[0].height;
+    container.appendChild(overlay);
+    editorState.cloneBrush.overlay = overlay;
+    console.log("[slowargo.js] Clone brush overlay initialized");
+}
+
+function initCloneToolEvents() {
+    if (editorState.cloneBrush.eventsBound) return;
+    // Use document capture phase + coordinate hit-testing to bypass
+    // the invisible cursor:none div that sits above the canvas container
+    // and intercepts all pointer events for Vue's brush tools.
+    document.addEventListener('pointerdown', onCloneMouseDown, true);
+    document.addEventListener('pointermove', onCloneMouseMove, true);
+    document.addEventListener('pointerup',   onCloneMouseUp,   true);
+    editorState.cloneBrush.eventsBound = true;
+    console.log("[slowargo.js] Clone tool events bound to document (capture)");
+}
+
+function isPointerInCanvasArea(e) {
+    const overlay = editorState.cloneBrush.overlay;
+    if (!overlay) return false;
+    const rect = overlay.getBoundingClientRect();
+    return e.clientX >= rect.left && e.clientX <= rect.right &&
+           e.clientY >= rect.top  && e.clientY <= rect.bottom;
+}
+
+function onCloneMouseDown(e) {
+    if (!editorState.cloneBrush.active) return;
+    if (!isPointerInCanvasArea(e)) return;
+
+    e.stopImmediatePropagation();
+    e.preventDefault();
+
+    const overlay = editorState.cloneBrush.overlay;
+    const { cx, cy } = displayToCanvas(overlay, e.clientX, e.clientY);
+
+    if (e.altKey) {
+        editorState.cloneBrush.hasSample  = true;
+        editorState.cloneBrush.sampleX    = cx;
+        editorState.cloneBrush.sampleY    = cy;
+        renderOverlay(cx, cy);
+        return;
+    }
+
+    if (!editorState.cloneBrush.hasSample) return;
+
+    editorState.cloneBrush.isDrawing    = true;
+    editorState.cloneBrush.strokeStartX = cx;
+    editorState.cloneBrush.strokeStartY = cy;
+    editorState.cloneBrush.lastDrawX    = cx;
+    editorState.cloneBrush.lastDrawY    = cy;
+    applyCloneStroke(cx, cy);
+}
+
+function onCloneMouseMove(e) {
+    if (!editorState.cloneBrush.active) return;
+    if (!isPointerInCanvasArea(e)) return;
+
+    const overlay = editorState.cloneBrush.overlay;
+    const {cx, cy} = displayToCanvas(overlay, e.clientX, e.clientY);
+
+    if (editorState.cloneBrush.isDrawing) {
+        e.stopImmediatePropagation();
+        applyCloneStroke(cx, cy);
+    }
+    renderOverlay(cx, cy);
+}
+function onCloneMouseUp(e) {
+    if (!editorState.cloneBrush.active || !editorState.cloneBrush.isDrawing) return;
+    e.stopImmediatePropagation();
+    editorState.cloneBrush.isDrawing = false;
+
+    const store = getMaskEditorStore();
+    store?.canvasHistory?.saveState?.();
+}
+
+function applyCloneStroke(cx, cy) {
+    const baseCanvas  = editorState.cloneBrush.baseCanvas;
+    const paintCanvas = editorState.cloneBrush.paintCanvas;
+    if (!baseCanvas || !paintCanvas) return;
+
+    const step = Math.max(1, editorState.cloneBrush.brushRadius / 3);
+    const dist  = Math.hypot(cx - editorState.cloneBrush.lastDrawX, cy - editorState.cloneBrush.lastDrawY);
+    const steps = Math.ceil(dist / step);
+
+    for (let i = 1; i <= steps; i++) {
+        const t  = i / steps;
+        const dx = editorState.cloneBrush.lastDrawX + (cx - editorState.cloneBrush.lastDrawX) * t;
+        const dy = editorState.cloneBrush.lastDrawY + (cy - editorState.cloneBrush.lastDrawY) * t;
+        stampClone(baseCanvas, paintCanvas, dx, dy);
+    }
+
+    editorState.cloneBrush.lastDrawX = cx;
+    editorState.cloneBrush.lastDrawY = cy;
+}
+
+function stampClone(baseCanvas, paintCanvas, drawX, drawY) {
+    const r = Math.ceil(editorState.cloneBrush.brushRadius);
+    const sigma = editorState.cloneBrush.brushRadius * 0.4;
+
+    const srcX = editorState.cloneBrush.sampleX + (drawX - editorState.cloneBrush.strokeStartX);
+    const srcY = editorState.cloneBrush.sampleY + (drawY - editorState.cloneBrush.strokeStartY);
+
+    const srcL = Math.max(0, Math.round(srcX - r));
+    const srcT = Math.max(0, Math.round(srcY - r));
+    const srcR = Math.min(baseCanvas.width,  Math.round(srcX + r));
+    const srcB = Math.min(baseCanvas.height, Math.round(srcY + r));
+    if (srcL >= srcR || srcT >= srcB) return;
+
+    const w = srcR - srcL;
+    const h = srcB - srcT;
+
+    const dstL = Math.round(drawX - (srcX - srcL));
+    const dstT = Math.round(drawY - (srcY - srcT));
+
+    const baseCtx  = baseCanvas.getContext('2d',  { willReadFrequently: true });
+    const paintCtx = paintCanvas.getContext('2d', { willReadFrequently: true });
+
+    const srcData = baseCtx.getImageData(srcL, srcT, w, h);
+    const dstData = paintCtx.getImageData(dstL, dstT, w, h);
+
+    for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+            const dx   = (srcL + px) - srcX;
+            const dy   = (srcT + py) - srcY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > editorState.cloneBrush.brushRadius) continue;
+
+            const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+            const i = (py * w + px) * 4;
+
+            dstData.data[i]   = srcData.data[i]   * weight + dstData.data[i]   * (1 - weight);
+            dstData.data[i+1] = srcData.data[i+1] * weight + dstData.data[i+1] * (1 - weight);
+            dstData.data[i+2] = srcData.data[i+2] * weight + dstData.data[i+2] * (1 - weight);
+            dstData.data[i+3] = Math.max(dstData.data[i+3], Math.round(srcData.data[i+3] * weight));
+        }
+    }
+
+    paintCtx.putImageData(dstData, dstL, dstT);
+}
+
+function renderOverlay(mouseX, mouseY) {
+    if (!editorState.cloneBrush.overlay || !editorState.cloneBrush.hasSample) return;
+
+    const ctx = editorState.cloneBrush.overlay.getContext('2d');
+    ctx.clearRect(0, 0, editorState.cloneBrush.overlay.width, editorState.cloneBrush.overlay.height);
+
+    drawCrosshair(ctx, editorState.cloneBrush.sampleX, editorState.cloneBrush.sampleY, '#ff4444');
+
+    if (editorState.cloneBrush.isDrawing) {
+        const trackedX = editorState.cloneBrush.sampleX + (mouseX - editorState.cloneBrush.strokeStartX);
+        const trackedY = editorState.cloneBrush.sampleY + (mouseY - editorState.cloneBrush.strokeStartY);
+        drawCrosshair(ctx, trackedX, trackedY, 'rgba(255, 68, 68, 0.5)');
+
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(trackedX, trackedY);
+        ctx.lineTo(mouseX, mouseY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    ctx.beginPath();
+    ctx.arc(mouseX, mouseY, editorState.cloneBrush.brushRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+}
+
+function drawCrosshair(ctx, x, y, color) {
+    const size = 8;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
+    ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
+    ctx.stroke();
+}
+
+function cleanupCloneTool() {
+    if (editorState.cloneBrush.isDrawing) {
+        getMaskEditorStore()?.canvasHistory?.saveState?.();
+        editorState.cloneBrush.isDrawing = false;
+    }
+
+    if (editorState.cloneBrush.eventsBound) {
+        document.removeEventListener('pointerdown', onCloneMouseDown, true);
+        document.removeEventListener('pointermove', onCloneMouseMove, true);
+        document.removeEventListener('pointerup',   onCloneMouseUp,   true);
+        editorState.cloneBrush.eventsBound = false;
+    }
+
+    editorState.cloneBrush.overlay?.remove();
+    editorState.cloneBrush.overlay    = null;
+    editorState.cloneBrush.baseCanvas  = null;
+    editorState.cloneBrush.paintCanvas = null;
+    editorState.cloneBrush.active     = false;
+    editorState.cloneBrush.hasSample  = false;
+    editorState.cloneBrush.isDrawing  = false;
+}
 
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor(reloadMaskOnly = false) {
@@ -473,9 +718,36 @@ function addFastForwardToggleButton() {
         }
     });
 
+    // Create Clone Brush button
+    const cloneBtn = document.createElement("button");
+    cloneBtn.className = "reload-mask-button";
+    cloneBtn.id = "clone-brush-button";
+    cloneBtn.title = "Clone Brush: Alt+Click to set source, drag to paint";
+    const cloneIcon = document.createElement("i");
+    cloneIcon.className = "pi pi-clone";
+    cloneBtn.appendChild(cloneIcon);
+    const cloneText = document.createElement("span");
+    cloneText.textContent = "Clone";
+    cloneBtn.appendChild(cloneText);
+
+    cloneBtn.addEventListener("click", () => {
+        editorState.cloneBrush.active = !editorState.cloneBrush.active;
+        cloneBtn.classList.toggle('active', editorState.cloneBrush.active);
+        if (editorState.cloneBrush.overlay) {
+            editorState.cloneBrush.overlay.classList.toggle('active', editorState.cloneBrush.active);
+        }
+        if (!editorState.cloneBrush.active) {
+            const ctx = editorState.cloneBrush.overlay?.getContext('2d');
+            ctx?.clearRect(0, 0, editorState.cloneBrush.overlay.width, editorState.cloneBrush.overlay.height);
+            editorState.cloneBrush.hasSample = false;
+        }
+        console.log("[slowargo.js] Clone Brush:", editorState.cloneBrush.active ? "enabled" : "disabled");
+    });
+
     buttonContainer.appendChild(toggleBtn);
     buttonContainer.appendChild(reloadMaskOnlyBtn);
     buttonContainer.appendChild(reloadAllBtn);
+    buttonContainer.appendChild(cloneBtn);
     buttonContainer.appendChild(blurBtn);
 
     updateToggleStyle();
@@ -490,6 +762,22 @@ export function initFastForwardMode() {
     // Sync Fast Forward Mode with CapsLock state (CapsLock ON = Fast Forward ON, OFF = Fast Forward OFF)
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
+
+        // Clone brush radius adjustment
+        if (editorState.cloneBrush.active) {
+            if (e.key === '[') {
+                e.preventDefault();
+                editorState.cloneBrush.brushRadius = Math.max(5, editorState.cloneBrush.brushRadius - 5);
+                renderOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
+                return;
+            }
+            if (e.key === ']') {
+                e.preventDefault();
+                editorState.cloneBrush.brushRadius = Math.min(300, editorState.cloneBrush.brushRadius + 5);
+                renderOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
+                return;
+            }
+        }
 
         // const capsLockOn = e.getModifierState('CapsLock');
         let targetNode = getFastForwardTargetNode();
@@ -575,6 +863,8 @@ export function initFastForwardMode() {
         initialized = true;
         currentDialog = dialog;
         restoreColorAndAddToggle();
+        initCloneBrushOverlay();
+        initCloneToolEvents();
 
         // Add click listener to toggle blur state when clicking on blurred editor
         if (!dialog.dataset.blurListenerAdded) {
@@ -622,6 +912,9 @@ export function initFastForwardMode() {
             // Editor closed — cleanup resources
             initialized = false;
             console.log("[slowargo.js] Mask editor closed, cleaning up resources");
+
+            // Cleanup clone tool
+            cleanupCloneTool();
 
             // Remove click listener from dialog
             if (currentDialog && dialogClickHandler) {
