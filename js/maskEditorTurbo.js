@@ -44,6 +44,15 @@ const colorMemory = {
 
 // === Clone Brush Functions ===
 
+function getCloneBrushRadius() {
+    // Use side panel brush range slider if available, otherwise fallback to internal state
+    const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
+    if (rangeInput?.value) {
+        return parseFloat(rangeInput.value);
+    }
+    return editorState.cloneBrush.brushRadius;
+}
+
 function displayToCanvas(canvas, clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     return {
@@ -150,7 +159,8 @@ function applyCloneStroke(cx, cy) {
     const paintCanvas = editorState.cloneBrush.paintCanvas;
     if (!baseCanvas || !paintCanvas) return;
 
-    const step = Math.max(1, editorState.cloneBrush.brushRadius / 3);
+    const radius = getCloneBrushRadius(); // read once per pointer event
+    const step = Math.max(1, radius / 3);
     const dist  = Math.hypot(cx - editorState.cloneBrush.lastDrawX, cy - editorState.cloneBrush.lastDrawY);
     const steps = Math.ceil(dist / step);
 
@@ -158,16 +168,16 @@ function applyCloneStroke(cx, cy) {
         const t  = i / steps;
         const dx = editorState.cloneBrush.lastDrawX + (cx - editorState.cloneBrush.lastDrawX) * t;
         const dy = editorState.cloneBrush.lastDrawY + (cy - editorState.cloneBrush.lastDrawY) * t;
-        stampClone(baseCanvas, paintCanvas, dx, dy);
+        stampClone(baseCanvas, paintCanvas, dx, dy, radius);
     }
 
     editorState.cloneBrush.lastDrawX = cx;
     editorState.cloneBrush.lastDrawY = cy;
 }
 
-function stampClone(baseCanvas, paintCanvas, drawX, drawY) {
-    const r = Math.ceil(editorState.cloneBrush.brushRadius);
-    const sigma = editorState.cloneBrush.brushRadius * 0.4;
+function stampClone(baseCanvas, paintCanvas, drawX, drawY, radius) {
+    const r = Math.ceil(radius);
+    const sigma = radius * 0.4;
 
     const srcX = editorState.cloneBrush.sampleX + (drawX - editorState.cloneBrush.strokeStartX);
     const srcY = editorState.cloneBrush.sampleY + (drawY - editorState.cloneBrush.strokeStartY);
@@ -195,7 +205,7 @@ function stampClone(baseCanvas, paintCanvas, drawX, drawY) {
             const dx   = (srcL + px) - srcX;
             const dy   = (srcT + py) - srcY;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > editorState.cloneBrush.brushRadius) continue;
+            if (dist > radius) continue;
 
             const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
             const i = (py * w + px) * 4;
@@ -216,12 +226,13 @@ function renderOverlay(mouseX, mouseY) {
     const ctx = editorState.cloneBrush.overlay.getContext('2d');
     ctx.clearRect(0, 0, editorState.cloneBrush.overlay.width, editorState.cloneBrush.overlay.height);
 
-    drawCrosshair(ctx, editorState.cloneBrush.sampleX, editorState.cloneBrush.sampleY, '#ff4444');
+    const radius = getCloneBrushRadius();
+    drawCrosshair(ctx, editorState.cloneBrush.sampleX, editorState.cloneBrush.sampleY, '#ff6666', radius);
 
     if (editorState.cloneBrush.isDrawing) {
         const trackedX = editorState.cloneBrush.sampleX + (mouseX - editorState.cloneBrush.strokeStartX);
         const trackedY = editorState.cloneBrush.sampleY + (mouseY - editorState.cloneBrush.strokeStartY);
-        drawCrosshair(ctx, trackedX, trackedY, 'rgba(255, 68, 68, 0.5)');
+        drawCrosshair(ctx, trackedX, trackedY, 'rgba(255, 102, 102, 0.7)', radius);
 
         ctx.setLineDash([4, 4]);
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
@@ -234,16 +245,15 @@ function renderOverlay(mouseX, mouseY) {
     }
 
     ctx.beginPath();
-    ctx.arc(mouseX, mouseY, editorState.cloneBrush.brushRadius, 0, Math.PI * 2);
+    ctx.arc(mouseX, mouseY, radius, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
     ctx.lineWidth = 1;
     ctx.stroke();
 }
 
-function drawCrosshair(ctx, x, y, color) {
-    const size = 8;
+function drawCrosshair(ctx, x, y, color, size = 8) {
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
     ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
@@ -720,7 +730,7 @@ function addFastForwardToggleButton() {
 
     // Create Clone Brush button
     const cloneBtn = document.createElement("button");
-    cloneBtn.className = "reload-mask-button";
+    cloneBtn.className = "fast-forward-mode-toggle";
     cloneBtn.id = "clone-brush-button";
     cloneBtn.title = "Clone Brush: Alt+Click to set source, drag to paint";
     const cloneIcon = document.createElement("i");
@@ -730,9 +740,19 @@ function addFastForwardToggleButton() {
     cloneText.textContent = "Clone";
     cloneBtn.appendChild(cloneText);
 
+    function updateCloneStyle() {
+        if (editorState.cloneBrush.active) {
+            cloneBtn.classList.add("enabled");
+            cloneBtn.classList.remove("disabled");
+        } else {
+            cloneBtn.classList.add("disabled");
+            cloneBtn.classList.remove("enabled");
+        }
+    }
+
     cloneBtn.addEventListener("click", () => {
         editorState.cloneBrush.active = !editorState.cloneBrush.active;
-        cloneBtn.classList.toggle('active', editorState.cloneBrush.active);
+        updateCloneStyle();
         if (editorState.cloneBrush.overlay) {
             editorState.cloneBrush.overlay.classList.toggle('active', editorState.cloneBrush.active);
         }
@@ -751,6 +771,7 @@ function addFastForwardToggleButton() {
     buttonContainer.appendChild(blurBtn);
 
     updateToggleStyle();
+    updateCloneStyle();
 }
 
 // === Fast Forward Mode Initialization ===
@@ -765,15 +786,32 @@ export function initFastForwardMode() {
 
         // Clone brush radius adjustment
         if (editorState.cloneBrush.active) {
+            const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
             if (e.key === '[') {
                 e.preventDefault();
-                editorState.cloneBrush.brushRadius = Math.max(5, editorState.cloneBrush.brushRadius - 5);
+                const currentRadius = getCloneBrushRadius();
+                const newRadius = Math.max(5, currentRadius - 5);
+                if (rangeInput) {
+                    rangeInput.value = newRadius;
+                    rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } else {
+                    editorState.cloneBrush.brushRadius = newRadius;
+                }
                 renderOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
                 return;
             }
             if (e.key === ']') {
                 e.preventDefault();
-                editorState.cloneBrush.brushRadius = Math.min(300, editorState.cloneBrush.brushRadius + 5);
+                const currentRadius = getCloneBrushRadius();
+                const newRadius = Math.min(300, currentRadius + 5);
+                if (rangeInput) {
+                    rangeInput.value = newRadius;
+                    rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } else {
+                    editorState.cloneBrush.brushRadius = newRadius;
+                }
                 renderOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
                 return;
             }

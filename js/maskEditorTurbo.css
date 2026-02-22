@@ -134,9 +134,3 @@
     pointer-events: all;
 }
 
-/* Clone button active state */
-.reload-mask-button.active {
-    background: rgba(255, 140, 0, 0.9);
-    box-shadow: 0 0 8px rgba(255, 140, 0, 0.8);
-}
-
