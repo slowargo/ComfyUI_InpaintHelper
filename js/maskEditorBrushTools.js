@@ -199,6 +199,9 @@ function onCloneMouseDown(e) {
     if (!editorState.cloneBrush.active) return;
     if (!isPointerInBrushArea(e)) return;
 
+    // Allow mask editor pan when space is held
+    if (isSpacePressed) return;
+
     e.stopImmediatePropagation();
     e.preventDefault();
 
@@ -453,6 +456,9 @@ function initSmudgeToolEvents() {
 function onSmudgeMouseDown(e) {
     if (!editorState.smudgeBrush.active) return;
     if (!isPointerInBrushArea(e)) return;
+
+    // Allow mask editor pan when space is held
+    if (isSpacePressed) return;
 
     e.stopImmediatePropagation();
     e.preventDefault();
