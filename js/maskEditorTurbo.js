@@ -557,7 +557,8 @@ async function onMaskEditorKeydown(e) {
     // Esc key toggles blur mode (intercept before blur mode pass-through)
     if (e.key === 'Escape') {
         // If mask is empty, let dialog close naturally
-        if (!isMaskNonEmpty()) {
+        // Or we can long press Esc to force close
+        if (e.repeat || !isMaskNonEmpty()) {
             return;
         }
         // Mask is non-empty: toggle blur state and prevent dialog from closing
