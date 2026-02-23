@@ -23,6 +23,9 @@ const editorState = {
     }
 };
 
+// Space key state for allowing mask editor pan functionality
+let isSpacePressed = false;
+
 // === Module-level Shared Tool Resources ===
 let brushToolOverlay = null;
 let baseCanvas = null;
@@ -227,6 +230,12 @@ function onCloneMouseDown(e) {
 function onCloneMouseMove(e) {
     if (!editorState.cloneBrush.active) return;
     if (!isPointerInBrushArea(e)) return;
+
+    // Allow mask editor pan when space is held
+    if (isSpacePressed) {
+        renderCloneOverlay(0, 0); // Clear overlay
+        return;
+    }
 
     const {cx, cy} = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
@@ -471,6 +480,12 @@ function onSmudgeMouseDown(e) {
 function onSmudgeMouseMove(e) {
     if (!editorState.smudgeBrush.active) return;
     if (!isPointerInBrushArea(e)) return;
+
+    // Allow mask editor pan when space is held
+    if (isSpacePressed) {
+        renderSmudgeOverlay(0, 0); // Clear overlay
+        return;
+    }
 
     const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
@@ -781,12 +796,18 @@ function createSmudgeButton() {
 
 /**
  * Handle keyboard events for brush tools.
- * Currently handles Esc to deactivate tools.
+ * Currently handles Esc to deactivate tools, Space to allow mask editor pan.
  * @param {KeyboardEvent} e - The keyboard event
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeydown(e) {
     if (!isAnyCustomToolActive()) return false;
+
+    // Track space key for allowing mask editor pan
+    if (e.key === ' ') {
+        isSpacePressed = true;
+        return false; // Don't intercept, let mask editor handle it
+    }
 
     // Esc to deactivate all custom tools
     if (e.key === 'Escape') {
@@ -797,6 +818,23 @@ function handleBrushToolKeydown(e) {
             brushToolOverlay.classList.remove('active');
         }
         return true;
+    }
+
+    return false;
+}
+
+/**
+ * Handle keyboard up events for brush tools.
+ * Tracks space key release for mask editor pan functionality.
+ * @param {KeyboardEvent} e - The keyboard event
+ * @returns {boolean} true if the event was handled, false otherwise
+ */
+function handleBrushToolKeyup(e) {
+    if (!isAnyCustomToolActive()) return false;
+
+    if (e.key === ' ') {
+        isSpacePressed = false;
+        return false;
     }
 
     return false;
@@ -860,8 +898,9 @@ export {
     createCloneButton,
     createSmudgeButton,
 
-    // Keyboard handler
+    // Keyboard handlers
     handleBrushToolKeydown,
+    handleBrushToolKeyup,
 
     // Clone Brush
     initCloneToolEvents,

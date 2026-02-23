@@ -9,6 +9,7 @@ import {
     createCloneButton,
     createSmudgeButton,
     handleBrushToolKeydown,
+    handleBrushToolKeyup,
     initCloneToolEvents,
     initSmudgeToolEvents,
     cleanupAllBrushTools,
@@ -500,97 +501,97 @@ function addFastForwardToggleButton() {
     updateSmudgeStyle();
 }
 
+// Keyboard event handlers for mask editor
+function onMaskEditorKeyup(e) {
+    if (!ComfyApp.maskeditor_is_opended()) return;
+    handleBrushToolKeyup(e);
+}
+
+async function onMaskEditorKeydown(e) {
+    if (!ComfyApp.maskeditor_is_opended()) return;
+
+    // Block undo/redo shortcuts in blur mode to prevent useKeyboard.ts from handling them
+    if (editorState.isBlurred) {
+        const isUndoRedo = (e.ctrlKey || e.metaKey) &&
+            (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y');
+        if (isUndoRedo) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
+    }
+
+    // Brush radius adjustment and Esc handling for brush tools
+    if (handleBrushToolKeydown(e)) {
+        return;
+    }
+
+    let targetNode = getFastForwardTargetNode();
+
+    if (editorState.isBlurred) {
+        // 进入 blur 模式后可能选了其他节点，让 targetNode 有值走后面的 Escape 键处理函数，退出 blur 模式
+        targetNode = app.graph.getNodeById(editorState.sourceNodeId);
+    }
+
+    if (!targetNode) return;
+
+    // Toggle blur mode when user presses the keybinding for Comfy.MaskEditor.OpenMaskEditor command
+    if (eventMatchesCommand(e, 'Comfy.MaskEditor.OpenMaskEditor')) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        toggleEditorBlur();
+        return;
+    }
+
+    // Esc key toggles blur mode (intercept before blur mode pass-through)
+    if (e.key === 'Escape') {
+        // If mask is empty, let dialog close naturally
+        if (!isMaskNonEmpty()) {
+            return;
+        }
+        // Mask is non-empty: toggle blur state and prevent dialog from closing
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        toggleEditorBlur();
+        return;
+    }
+
+    // In blur mode, let all keyboard events pass through to main UI
+    if (editorState.isBlurred) return;
+
+    // Ctrl+L loads clipspace content into current editor
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        console.log("[slowargo.js] Loading clipspace content...");
+        await loadClipspaceToEditor();
+        return;
+    }
+
+    // Enter executes Fast Forward cycle if enabled and mask is not empty
+    if (e.key !== 'Enter') return;
+    if (!editorState.fastForwardModeOn) return;
+    if (editorState.cycleInProgress) return;
+
+    if (!isMaskNonEmpty()) {
+        console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
+        return;
+    }
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
+    console.log("[slowargo.js] Fast Forward Mode: starting cycle for node", targetNode.id);
+    await executeFastForwardCycle(targetNode);
+}
+
 // === Fast Forward Mode Initialization ===
 export function initFastForwardMode() {
     let initialized = false; // 标志位：是否已初始化当前 editor
     let dialogClickHandler = null;
     let currentDialog = null;
 
-    // Sync Fast Forward Mode with CapsLock state (CapsLock ON = Fast Forward ON, OFF = Fast Forward OFF)
-    window.addEventListener('keydown', async function(e) {
-        if (!ComfyApp.maskeditor_is_opended()) return;
-
-        // Brush radius adjustment for any active custom tool
-        if (handleBrushToolKeydown(e)) {
-            return;
-        }
-
-        // const capsLockOn = e.getModifierState('CapsLock');
-        let targetNode = getFastForwardTargetNode();
-
-        // Sync CapsLock state with Fast Forward Mode enabled state
-        // if (capsLockOn !== editorState.fastForwardModeOn && targetNode) {
-        //     editorState.fastForwardModeOn = capsLockOn;
-        //     const toggleBtn = document.querySelector(".fast-forward-mode-toggle");
-        //     if (toggleBtn) {
-        //         const style = toggleBtn.style;
-        //         if (editorState.fastForwardModeOn) {
-        //             style.opacity = "1";
-        //             style.boxShadow = "0 0 8px rgba(30, 144, 255, 0.8)";
-        //         } else {
-        //             style.opacity = "0.6";
-        //             style.boxShadow = "none";
-        //         }
-        //     }
-        //     console.log("[slowargo.js] Fast Forward Mode:", editorState.fastForwardModeOn ? "enabled" : "disabled");
-        // }
-
-        if (editorState.isBlurred) {
-            // 进入 blur 模式后可能选了其他节点，让 targetNode 有值走后面的 Escape 键处理函数，退出 blur 模式
-            targetNode = app.graph.getNodeById(editorState.sourceNodeId);
-        }
-
-        if (!targetNode) return;
-
-        // Toggle blur mode when user presses the keybinding for Comfy.MaskEditor.OpenMaskEditor command
-        if (eventMatchesCommand(e, 'Comfy.MaskEditor.OpenMaskEditor')) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleEditorBlur();
-            return;
-        }
-
-        // Esc key toggles blur mode (intercept before blur mode pass-through)
-        if (e.key === 'Escape') {
-            // If mask is empty, let dialog close naturally
-            if (!isMaskNonEmpty()) {
-                return;
-            }
-            // Mask is non-empty: toggle blur state and prevent dialog from closing
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            toggleEditorBlur();
-            return;
-        }
-
-        // In blur mode, let all keyboard events pass through to main UI
-        if (editorState.isBlurred) return;
-
-        // Ctrl+L loads clipspace content into current editor
-        if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            console.log("[slowargo.js] Loading clipspace content...");
-            await loadClipspaceToEditor();
-            return;
-        }
-
-        // Enter executes Fast Forward cycle if enabled and mask is not empty
-        if (e.key !== 'Enter') return;
-        if (!editorState.fastForwardModeOn) return;
-        if (editorState.cycleInProgress) return;
-
-        if (!isMaskNonEmpty()) {
-            console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
-            return;
-        }
-
-        e.preventDefault();
-        e.stopImmediatePropagation();
-
-        console.log("[slowargo.js] Fast Forward Mode: starting cycle for node", targetNode.id);
-        await executeFastForwardCycle(targetNode);
-    }, true);
+    // Note: Keyboard events are bound/unbound dynamically in onEditorReady and cleanup
 
     // Two-phase observer for detecting mask editor opening
     // Phase 1: Monitor body direct children for p-dialog-mask appearance/removal (cheap)
@@ -602,6 +603,10 @@ export function initFastForwardMode() {
         initBrushToolOverlay();
         initCloneToolEvents();
         initSmudgeToolEvents();
+
+        // Bind keyboard events for editor
+        window.addEventListener('keydown', onMaskEditorKeydown, true);
+        window.addEventListener('keyup', onMaskEditorKeyup, true);
 
         // Add click listener to toggle blur state when clicking on blurred editor
         if (!dialog.dataset.blurListenerAdded) {
@@ -652,6 +657,10 @@ export function initFastForwardMode() {
 
             // Cleanup all brush tools (clone, smudge, overlay, canvas refs)
             cleanupAllBrushTools();
+
+            // Remove keyboard event listeners
+            window.removeEventListener('keydown', onMaskEditorKeydown, true);
+            window.removeEventListener('keyup', onMaskEditorKeyup, true);
 
             // Remove click listener from dialog
             if (currentDialog && dialogClickHandler) {
