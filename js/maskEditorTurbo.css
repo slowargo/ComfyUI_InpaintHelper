@@ -120,7 +120,7 @@
     position: relative;                       /* Ensures absolute positioned buttons use this as reference, not a higher ancestor */
 }
 
-/* === Brush Tool Overlay (Clone & Smudge) ===
+/* === Brush Tool Overlay (Clone & Smudge) === */
 #brush-tool-overlay {
     position: absolute;
     top: 0; left: 0;

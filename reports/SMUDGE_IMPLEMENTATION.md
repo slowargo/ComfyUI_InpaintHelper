@@ -3,6 +3,8 @@
 ## Overview
 成功实现了 Smudge（涂抹）工具，与现有的 Clone Brush 共享同一套架构基础。
 
+---
+
 ## Key Changes
 
 ### 1. Shared Overlay Architecture (maskEditorTurbo.js)
@@ -13,6 +15,10 @@ let brushToolOverlay = null;
 let baseCanvas = null;
 let paintCanvas = null;
 let globalBrushRadius = 20;
+
+// Button references for module-scope style updates
+let cloneBtnRef = null;
+let smudgeBtnRef = null;
 ```
 
 #### Unified Overlay Initialization
@@ -21,9 +27,9 @@ let globalBrushRadius = 20;
 - 支持多个工具共享同一个 overlay canvas
 
 #### Tool Utility Functions
-- `getBrushRadius()` - 获取笔刷大小（从 slider 或全局变量）
-- `setBrushRadius(radius)` - 设置笔刷大小
+- `getBrushRadius()` / `setBrushRadius(radius)` - 笔刷大小读写
 - `isPointerInBrushArea(e)` - 检测指针是否在画布区域
+- `updateCloneStyle()` / `updateSmudgeStyle()` - 按钮样式更新（**模块级**，通过 `cloneBtnRef`/`smudgeBtnRef` 操作）
 - `deactivateAllCustomTools()` - 互斥关闭所有自定义工具
 - `isAnyCustomToolActive()` - 检查是否有工具激活
 
@@ -36,26 +42,20 @@ let globalBrushRadius = 20;
 - 移除 `editorState.cloneBrush.brushRadius`（改用全局 `globalBrushRadius`）
 
 #### Function Updates
-- `getCloneBrushRadius()` → 委托给 `getBrushRadius()`
 - `renderOverlay()` → 重命名为 `renderCloneOverlay()`
-- `initCloneBrushOverlay()` → 改为调用 `initBrushToolOverlay()`
+- `initCloneBrushOverlay()` → 已删除（改为 `initBrushToolOverlay()`）
 - `isPointerInCanvasArea()` → 改为 `isPointerInBrushArea()`
 - Clone 按钮事件：使用 `deactivateAllCustomTools()` 实现工具互斥
 
 ### 3. Smudge Tool Implementation
 
-#### New State in editorState
+#### State in editorState
 ```javascript
 smudgeBrush: {
     active: false,
     isDrawing: false,
-    lastDrawX: 0,
-    lastDrawY: 0,
-    carriedBuffer: null,      // Float32Array
-    bufferWidth: 0,
-    bufferHeight: 0,
-    bufferOffsetX: 0,
-    bufferOffsetY: 0,
+    lastDrawX: 0, lastDrawY: 0,
+    carriedBuffer: null,      // { data: Float32Array, width, height, offsetX, offsetY }
     eventsBound: false,
 }
 ```
@@ -63,27 +63,27 @@ smudgeBrush: {
 #### Core Smudge Functions
 
 1. **Event Handlers**
-   - `initSmudgeToolEvents()` - 绑定事件监听器
-   - `onSmudgeMouseDown(e)` - 采样起始像素
-   - `onSmudgeMouseMove(e)` - 应用涂抹笔触
-   - `onSmudgeMouseUp(e)` - 完成笔触，保存 undo 检查点
+   - `initSmudgeToolEvents()` - 绑定文档级捕获阶段监听器
+   - `onSmudgeMouseDown(e)` - 采样起始复合像素 → carriedBuffer
+   - `onSmudgeMouseMove(e)` - 应用涂抹笔触 + 渲染 overlay
+   - `onSmudgeMouseUp(e)` - 完成笔触，保存 undo 检查点，清空 carriedBuffer
 
 2. **Sampling & Compositing**
-   - `sampleComposite(cx, cy, radius)` - 从 Base + Paint 采样合成像素
-   - 返回 Float32Array 以避免累积舍入误差
+   - `sampleComposite(cx, cy, radius)` - 从 Base + Paint 采样合成像素，返回 Float32Array
 
 3. **Smudge Algorithm**
-   - `applySmudgeStroke(cx, cy)` - 插值笔触路径
-   - `stampSmudge(cx, cy, radius)` - 每个步骤的核心涂抹操作
-     - 强度（strength）：固定 0.5
-     - 高斯衰减：sigma = radius * 0.4
-     - 递进混合：carried 像素不断混合，产生衰减效果
+   - `applySmudgeStroke(cx, cy)` - 插值笔触路径（同 Clone Brush）
+   - `stampSmudge(drawX, drawY, radius)` - 核心涂抹操作：
+     - 强度（strength）：固定 `SMUDGE_STRENGTH = 0.5`
+     - 高斯衰减：`sigma = radius * 0.4`
+     - **笔刷相对坐标**：`cbx = Math.round(dx) + r`（dx = canvasX - drawX）
+     - 递进混合：写回 carried buffer，颜色随拖动逐渐衰减
 
 4. **Visualization**
-   - `renderSmudgeOverlay(mouseX, mouseY)` - 绘制橙色笔刷圆圈（区分于 Clone 的白色）
+   - `renderSmudgeOverlay(mouseX, mouseY)` - 绘制橙色笔刷圆圈，**始终显示**（不受 isDrawing 限制）
 
 5. **Cleanup**
-   - `cleanupSmudgeTool()` - 释放资源，移除事件监听
+   - `cleanupSmudgeTool()` - 释放 carriedBuffer，移除事件监听，重置状态
 
 ### 4. UI & Keyboard Integration
 
@@ -92,84 +92,99 @@ smudgeBrush: {
 - 图标：`pi pi-arrow-right-arrow-left`
 - 文本：`Smudge`
 - 样式：复用 `.fast-forward-mode-toggle` class（enabled/disabled 状态）
-- 点击行为：互斥激活（点击 Smudge 时关闭 Clone，反之亦然）
+- `cloneBtnRef = cloneBtn` / `smudgeBtnRef = smudgeBtn` 在创建时赋值
 
 #### Keyboard Shortcuts ([ 和 ])
-- 支持所有激活的自定义工具（不限于 Clone）
-- 增量调整笔刷大小（±5px）
-- 同步更新 UI slider 和全局变量
+- 条件改为 `isAnyCustomToolActive()`，支持 Clone 和 Smudge 共用
+- 增量调整笔刷大小（±5px），同步更新 UI slider 和全局变量
 
 #### Initialize & Cleanup
-- 编辑器打开时：`initBrushToolOverlay()` + `initCloneToolEvents()` + `initSmudgeToolEvents()`
-- 编辑器关闭时：`cleanupCloneTool()` + `cleanupSmudgeTool()` + 清理共享资源
+- 编辑器打开：`initBrushToolOverlay()` + `initCloneToolEvents()` + `initSmudgeToolEvents()`
+- 编辑器关闭：`cleanupCloneTool()` + `cleanupSmudgeTool()` + 清理共享 overlay/canvas 引用
 
 ### 5. CSS Updates
 
 #### maskEditorTurbo.css
-- 选择器更新：`#clone-brush-overlay` → `#brush-tool-overlay`
-- 保持原有功能：pointer-events toggle、z-index、cursor 等
+- 选择器：`#clone-brush-overlay` → `#brush-tool-overlay`（注释正确闭合）
+
+---
 
 ## Algorithm Details
 
 ### Smudge Blending
-```
-On mousedown at P:
-  1. Sample composite (base + paint) at P → carriedBuffer
 
-For each interpolated step at Q:
-  1. Read composite at Q → destBuffer
-  2. For each pixel within radius R:
-     - w = gaussian(distance, radius) with σ = radius * 0.4
-     - s = STRENGTH * w = 0.5 * w
-     - output = carried * s + dest * (1 - s)
-     - carried = output (update for next step)
-  3. Write output to Paint layer
+```
+On mousedown at P(cx, cy):
+  carriedBuffer = sampleComposite(cx, cy, radius)
+  // carriedBuffer[relX][relY] = composite color at (cx - r + relX, cy - r + relY)
+
+For each interpolated step at Q(drawX, drawY):
+  For each pixel at (canvasX, canvasY) within radius of Q:
+    dx = canvasX - drawX
+    dy = canvasY - drawY
+    dist = sqrt(dx² + dy²)
+    w = gaussian(dist, sigma=radius*0.4)
+    s = SMUDGE_STRENGTH * w   // = 0.5 * w
+
+    // Brush-relative index into carried buffer (always valid regardless of brush position)
+    cbx = round(dx) + r        // range [0, 2r]
+    cby = round(dy) + r
+
+    dest = composite(baseData, paintData) at (canvasX, canvasY)
+    output = carried[cbx][cby] * s + dest * (1 - s)
+    paint[canvasX][canvasY] = output
+    carried[cbx][cby] = output  // progressive decay
 
 On mouseup:
-  - Save undo checkpoint via canvasHistory.saveState()
-  - Clear carriedBuffer
+  canvasHistory.saveState()   // undo checkpoint
+  carriedBuffer = null
 ```
 
 ### Compositing Formula
 ```javascript
-// Composite pixel from Paint + Base
-alpha_norm = paintAlpha / 255
-composited_rgb = paint_rgb * alpha_norm + base_rgb * (1 - alpha_norm)
-composited_alpha = max(paint_alpha, base_alpha)
+const pa = paintAlpha / 255;
+composite_rgb = paint_rgb * pa + base_rgb * (1 - pa);
+composite_a   = max(paint_a, base_a);
 ```
+
+---
+
+## Bug Fixes Applied (Post-Review)
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 1 | CSS `/* ... ===` 缺少 `*/`，overlay 样式规则全被注释掉，工具完全失效 | 补全 `*/` |
+| 2 | `updateCloneStyle`/`updateSmudgeStyle` 定义在 `addFastForwardToggleButton` 闭包内，`deactivateAllCustomTools`（模块级）调用时 ReferenceError | 提升为模块级函数，通过 `cloneBtnRef`/`smudgeBtnRef` 访问按钮 |
+| 3 | `stampSmudge` 用绝对坐标 `canvasX - cox` 索引 carried buffer；笔刷移动超过 `2r` 后 `cbx >= cw`，涂抹效果消失 | 改为笔刷相对坐标 `Math.round(dx) + r` |
+| 4 | `renderSmudgeOverlay` guard `!isDrawing` 导致悬浮时不显示笔刷圆圈 | 移除 guard |
+| 5 | 死代码：`getCloneBrushRadius` wrapper、`initCloneBrushOverlay` stub、state 中未用的 `bufferWidth/Height/OffsetX/OffsetY` | 全部删除 |
+
+---
 
 ## Testing Checklist
 
 - [ ] Mask Editor 打开，确认工具栏显示 Smudge 按钮
-- [ ] 点击 Smudge，确认激活（蓝色高亮）
-- [ ] Smudge 激活时，Clone 自动关闭
-- [ ] 在已绘制区域拖动，确认像素涂抹效果
+- [ ] 鼠标悬浮在画布上，确认橙色笔刷圆圈显示（无需按下）
+- [ ] 点击 Smudge，确认激活（蓝色高亮），Clone 自动关闭
+- [ ] 在已绘制区域短距离拖动，确认像素涂抹效果
+- [ ] **长笔触测试**：拖动距离 > 2×radius，确认涂抹效果贯穿全程（验证 Bug 3 修复）
 - [ ] 在 Base 层拖动，确认原始图像像素被涂抹到 Paint 层
-- [ ] `[` / `]` 键调整笔刷大小，确认同时工作于 Clone 和 Smudge
-- [ ] Ctrl+Z 撤销整个涂抹笔触
-- [ ] 点击 Clone，Smudge 自动关闭
-- [ ] 关闭 Mask Editor，确认无内存泄漏
-- [ ] 快速切换工具，确认状态管理正确
+- [ ] `[` / `]` 键调整笔刷大小，确认 Clone 和 Smudge 均响应
+- [ ] Ctrl+Z 撤销整个涂抹笔触（一次 undo 回退一整笔）
+- [ ] 点击 Clone 后 Smudge 自动关闭，Clone 样式正确（验证 Bug 2 修复）
+- [ ] 关闭 Mask Editor，重新打开，确认无残留状态
 
 ## Files Modified
 
 | File | Changes |
 |------|---------|
-| `js/maskEditorTurbo.js` | 工具架构重构、Smudge 实现、UI 更新、事件处理 |
-| `js/maskEditorTurbo.css` | Overlay selector 更新 |
-
-## Architecture Benefits
-
-1. **可扩展性**：新增工具只需实现 init + event handlers + stamp + render + cleanup
-2. **代码复用**：Overlay canvas、坐标转换、笔刷大小、keyboard handler 等共享
-3. **工具互斥**：`deactivateAllCustomTools()` 避免多工具冲突
-4. **性能**：单个 overlay canvas、合理的采样和混合策略
-5. **用户体验**：视觉反馈（不同颜色区分工具）、自然的涂抹效果
+| `js/maskEditorTurbo.js` | 工具架构重构、Smudge 实现、5 项 bug 修复 |
+| `js/maskEditorTurbo.css` | Overlay selector 更新，修复注释闭合 |
 
 ## Known Limitations & Future Work
 
 1. **Strength 参数**：当前固定为 0.5，可考虑未来添加 UI 控件
-2. **多层支持**：目前仅在 Paint 层写入，可考虑支持 Mask 层
-3. **撤销粒度**：按笔触粒度（mouseup）保存 undo，可考虑更细粒度
-4. **性能优化**：大笔刷 + 快速拖动时的 GPU 优化
-5. **视觉反馈**：可考虑显示涂抹方向箭头或强度指示器
+2. **多层支持**：目前仅在 Paint 层写入，涂抹结果不影响 Mask 层
+3. **撤销粒度**：按笔触粒度（mouseup）保存 undo，整笔回退
+4. **性能**：大笔刷 + 快速拖动时，每步都有两次 `getImageData`（base + paint）；可考虑缓存 base layer 数据
+5. **视觉反馈**：可考虑在涂抹方向添加方向箭头或运动模糊指示

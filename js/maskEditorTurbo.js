@@ -32,10 +32,6 @@ const editorState = {
         isDrawing: false,
         lastDrawX: 0, lastDrawY: 0,
         carriedBuffer: null,      // Float32Array carrying sampled pixels
-        bufferWidth: 0,
-        bufferHeight: 0,
-        bufferOffsetX: 0,
-        bufferOffsetY: 0,
         eventsBound: false,
     }
 };
@@ -89,6 +85,22 @@ function isPointerInBrushArea(e) {
            e.clientY >= rect.top  && e.clientY <= rect.bottom;
 }
 
+// Module-level button references for style updates
+let cloneBtnRef = null;
+let smudgeBtnRef = null;
+
+function updateCloneStyle() {
+    if (!cloneBtnRef) return;
+    cloneBtnRef.classList.toggle('enabled',  editorState.cloneBrush.active);
+    cloneBtnRef.classList.toggle('disabled', !editorState.cloneBrush.active);
+}
+
+function updateSmudgeStyle() {
+    if (!smudgeBtnRef) return;
+    smudgeBtnRef.classList.toggle('enabled',  editorState.smudgeBrush.active);
+    smudgeBtnRef.classList.toggle('disabled', !editorState.smudgeBrush.active);
+}
+
 function deactivateAllCustomTools() {
     if (editorState.cloneBrush.active) {
         editorState.cloneBrush.active = false;
@@ -122,22 +134,12 @@ const colorMemory = {
 
 // === Clone Brush Functions ===
 
-function getCloneBrushRadius() {
-    return getBrushRadius();
-}
-
 function displayToCanvas(canvas, clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     return {
         cx: (clientX - rect.left) * canvas.width  / rect.width,
         cy: (clientY - rect.top)  * canvas.height / rect.height,
     };
-}
-
-// Deprecated: use initBrushToolOverlay() instead
-// Keep this stub for backward compatibility during transition
-function initCloneBrushOverlay() {
-    console.log("[slowargo.js] initCloneBrushOverlay deprecated, use initBrushToolOverlay");
 }
 
 function initCloneToolEvents() {
@@ -432,7 +434,7 @@ function applySmudgeStroke(cx, cy) {
     editorState.smudgeBrush.lastDrawY = cy;
 }
 
-const SMUDGE_STRENGTH = 0.5;
+const SMUDGE_STRENGTH = 0.8;
 
 function stampSmudge(drawX, drawY, radius) {
     const r = Math.ceil(radius);
@@ -458,8 +460,6 @@ function stampSmudge(drawX, drawY, radius) {
     const cb = carried.data;
     const cw = carried.width;
     const ch = carried.height;
-    const cox = carried.offsetX;
-    const coy = carried.offsetY;
 
     for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
@@ -483,9 +483,10 @@ function stampSmudge(drawX, drawY, radius) {
             const destB = paintData.data[di+2] * pa + baseData.data[di+2] * (1 - pa);
             const destA = Math.max(paintData.data[di+3], baseData.data[di+3]);
 
-            // Map to carried buffer
-            const cbx = canvasX - cox;
-            const cby = canvasY - coy;
+            // Brush-relative coordinates: index carried buffer from brush center
+            // This keeps the mapping correct regardless of how far the brush has moved
+            const cbx = Math.round(dx) + r;
+            const cby = Math.round(dy) + r;
 
             if (cbx >= 0 && cbx < cw && cby >= 0 && cby < ch) {
                 const ci = (cby * cw + cbx) * 4;
@@ -514,7 +515,7 @@ function stampSmudge(drawX, drawY, radius) {
 }
 
 function renderSmudgeOverlay(mouseX, mouseY) {
-    if (!brushToolOverlay || !editorState.smudgeBrush.isDrawing) return;
+    if (!brushToolOverlay) return;
 
     const ctx = brushToolOverlay.getContext('2d');
     ctx.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
@@ -1004,16 +1005,7 @@ function addFastForwardToggleButton() {
     const cloneText = document.createElement("span");
     cloneText.textContent = "Clone";
     cloneBtn.appendChild(cloneText);
-
-    function updateCloneStyle() {
-        if (editorState.cloneBrush.active) {
-            cloneBtn.classList.add("enabled");
-            cloneBtn.classList.remove("disabled");
-        } else {
-            cloneBtn.classList.add("disabled");
-            cloneBtn.classList.remove("enabled");
-        }
-    }
+    cloneBtnRef = cloneBtn;
 
     cloneBtn.addEventListener("click", () => {
         const willActivate = !editorState.cloneBrush.active;
@@ -1039,16 +1031,7 @@ function addFastForwardToggleButton() {
     const smudgeText = document.createElement("span");
     smudgeText.textContent = "Smudge";
     smudgeBtn.appendChild(smudgeText);
-
-    function updateSmudgeStyle() {
-        if (editorState.smudgeBrush.active) {
-            smudgeBtn.classList.add("enabled");
-            smudgeBtn.classList.remove("disabled");
-        } else {
-            smudgeBtn.classList.add("disabled");
-            smudgeBtn.classList.remove("enabled");
-        }
-    }
+    smudgeBtnRef = smudgeBtn;
 
     smudgeBtn.addEventListener("click", () => {
         const willActivate = !editorState.smudgeBrush.active;
@@ -1072,6 +1055,7 @@ function addFastForwardToggleButton() {
 
     updateToggleStyle();
     updateCloneStyle();
+    updateSmudgeStyle();
 }
 
 // === Fast Forward Mode Initialization ===
