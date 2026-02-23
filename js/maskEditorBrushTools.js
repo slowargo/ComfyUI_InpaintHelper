@@ -31,17 +31,18 @@ let paintCanvas = null;
 // === Brush Tool Functions ===
 
 let globalBrushRadius = 20;
+let lastBrushReadTime = 0;
 
 function getBrushRadius() {
-    const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
-    if (rangeInput?.value) {
-        return parseFloat(rangeInput.value);
+    const now = Date.now();
+    if (now - lastBrushReadTime >= 500) {
+        const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
+        if (rangeInput?.value) {
+            globalBrushRadius = parseFloat(rangeInput.value);
+            lastBrushReadTime = now;
+        }
     }
     return globalBrushRadius;
-}
-
-function setBrushRadius(radius) {
-    globalBrushRadius = Math.max(5, Math.min(300, radius));
 }
 
 // 初始化 BrushToolOverlay。Overlay 是一个共享的覆盖层画布，为 Clone Brush 和 Smudge Brush 提供两个核心功能：
@@ -643,44 +644,6 @@ function handleBrushToolKeydown(e) {
         return true;
     }
 
-    const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
-
-    if (e.key === '[') {
-        e.preventDefault();
-        const currentRadius = getBrushRadius();
-        const newRadius = Math.max(5, currentRadius - 5);
-        setBrushRadius(newRadius);
-        if (rangeInput) {
-            rangeInput.value = newRadius;
-            rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
-            rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        if (editorState.cloneBrush.active) {
-            renderCloneOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
-        } else if (editorState.smudgeBrush.active) {
-            renderSmudgeOverlay(editorState.smudgeBrush.lastDrawX, editorState.smudgeBrush.lastDrawY);
-        }
-        return true;
-    }
-
-    if (e.key === ']') {
-        e.preventDefault();
-        const currentRadius = getBrushRadius();
-        const newRadius = Math.min(300, currentRadius + 5);
-        setBrushRadius(newRadius);
-        if (rangeInput) {
-            rangeInput.value = newRadius;
-            rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
-            rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        if (editorState.cloneBrush.active) {
-            renderCloneOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
-        } else if (editorState.smudgeBrush.active) {
-            renderSmudgeOverlay(editorState.smudgeBrush.lastDrawX, editorState.smudgeBrush.lastDrawY);
-        }
-        return true;
-    }
-
     return false;
 }
 
@@ -722,7 +685,6 @@ export {
 
     // Brush radius
     getBrushRadius,
-    setBrushRadius,
 
     // Overlay
     initBrushToolOverlay,
