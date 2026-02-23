@@ -198,13 +198,18 @@ function applyCloneStroke(cx, cy) {
     const steps = Math.ceil(dist / step);
 
     // 线性插值填充间隙
-    for (let i = 1; i <= steps; i++) {
-        const t  = i / steps; // 0.0 ~ 1.0 的插值因子
-        // 在 lastDraw 和 current 之间均匀分布 stamp
-        const dx = editorState.cloneBrush.lastDrawX + (cx - editorState.cloneBrush.lastDrawX) * t;
-        const dy = editorState.cloneBrush.lastDrawY + (cy - editorState.cloneBrush.lastDrawY) * t;
-        // 在插值点执行克隆
-        stampClone(dx, dy, radius);
+    if (steps === 0) {
+        // 没有移动距离时至少绘制一个点（仅 mouse down 的情况）
+        stampClone(cx, cy, radius);
+    } else {
+        for (let i = 1; i <= steps; i++) {
+            const t  = i / steps; // 0.0 ~ 1.0 的插值因子
+            // 在 lastDraw 和 current 之间均匀分布 stamp
+            const dx = editorState.cloneBrush.lastDrawX + (cx - editorState.cloneBrush.lastDrawX) * t;
+            const dy = editorState.cloneBrush.lastDrawY + (cy - editorState.cloneBrush.lastDrawY) * t;
+            // 在插值点执行克隆
+            stampClone(dx, dy, radius);
+        }
     }
 
     editorState.cloneBrush.lastDrawX = cx;
@@ -620,12 +625,23 @@ function createSmudgeButton() {
 
 /**
  * Handle keyboard events for brush tools.
- * Currently handles '[' and ']' for brush radius adjustment.
+ * Currently handles '[' and ']' for brush radius adjustment, Esc to deactivate tools.
  * @param {KeyboardEvent} e - The keyboard event
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeydown(e) {
     if (!isAnyCustomToolActive()) return false;
+
+    // Esc to deactivate all custom tools
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        deactivateAllCustomTools();
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.remove('active');
+        }
+        return true;
+    }
 
     const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
 
