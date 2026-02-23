@@ -316,10 +316,12 @@ function restoreColorAndAddToggle() {
         console.log("[slowargo.js] Restored color:", savedColor);
     }
 
+    // 检查是否来自LoadRecentImagePlusV1
     const targetNode = getFastForwardTargetNode();
     if (!targetNode) {
         console.log("[slowargo.js] Fast Forward Mode: target node not found, skipping toggle");
-        return;
+        editorState.sourceNodeId = null;
+        return false;
     }
 
     editorState.sourceNodeId = targetNode.id;
@@ -353,6 +355,7 @@ function restoreColorAndAddToggle() {
     //     }
     // }
 
+    return true;
 }
 
 function cleanupFastForwardUI(dialog) {
@@ -514,20 +517,53 @@ function onMaskEditorKeyup(e) {
 async function onMaskEditorKeydown(e) {
     if (!ComfyApp.maskeditor_is_opended()) return;
 
+    function switchMode() {
+        // 不区分 blur 模式和 focused 模式 的公共逻辑
+        // Toggle blur mode when user presses the keybinding for Comfy.MaskEditor.OpenMaskEditor command
+        if (eventMatchesCommand(e, 'Comfy.MaskEditor.OpenMaskEditor')) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleEditorBlur();
+            return true;
+        }
+
+        // Esc key toggles blur mode (intercept before blur mode pass-through)
+        if (e.key === 'Escape') {
+            // If mask is empty, let dialog close naturally
+            // Or we can long press Esc to force close
+            if (e.repeat || !isMaskNonEmpty()) {
+                return true;
+            }
+            // Mask is non-empty: toggle blur state and prevent dialog from closing
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            toggleEditorBlur();
+            return true;
+        }
+        return false;
+    }
+
     let targetNode = getFastForwardTargetNode();
 
     const isUndoRedo = (e.ctrlKey || e.metaKey) &&
         (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y');
 
-    // 针对 blur 模式的特殊处理
-    // 因为 editor 未关闭，src/composables/maskeditor/useKeyboard.ts 的 event handler 仍然有效，在主界面操作时默认会走
-    //   editor 的键盘事件 handler，即空格、CTRL+Z、CTRL+Y 会被拦截
-    // 仅仅阻止事件传播到 useKeyboard.ts 也不够完美。此时 maskeditor_is_opended, 因此主界面的 src/scripts/changeTracker.ts 也是
-    //   不工作的，无法使用快捷键触发 undo/redo。暂时无解，但允许 default handler 至少让 textarea 的 undo/redo 可以工作
     if (editorState.isBlurred) {
+        // blur mode
+
+        // Exit blur mode?
+        if (switchMode()) {
+            return;
+        }
+
+        // 因为 editor 未关闭，src/composables/maskeditor/useKeyboard.ts 的 event handler 仍然有效，在主界面操作时默认会走
+        //   editor 的键盘事件 handler，即空格、CTRL+Z、CTRL+Y 会被拦截
+        // 仅仅阻止事件传播到 useKeyboard.ts 也不够完美。此时 maskeditor_is_opended, 因此主界面的 src/scripts/changeTracker.ts 也是
+        //   不工作的，无法使用快捷键触发 undo/redo。暂时无解，但允许 default handler 至少让 textarea 的 undo/redo 可以工作
+
         // 进入 blur 模式后可能选了其他非LoadRecentImagePlusV1节点，getFastForwardTargetNode() 会返回 null
         // 让 targetNode 有值避免下面 return，继续走后面的 Escape 键处理函数，退出 blur 模式
-        targetNode = app.graph.getNodeById(editorState.sourceNodeId);
+        // targetNode = app.graph.getNodeById(editorState.sourceNodeId);
 
         // 阻止空格键继续传播到 useKeyboard.ts, 但 default handler 仍然允许执行，从而允许在主界面文本框输入空格
         if (e.key === ' ') {
@@ -542,82 +578,70 @@ async function onMaskEditorKeydown(e) {
             e.stopImmediatePropagation();
             return;
         }
-    }
 
-    if (!targetNode) return;
+        // Otherwise, let all keyboard events pass through to main UI
+    } else {
+        // focused mode
 
-    // Toggle blur mode when user presses the keybinding for Comfy.MaskEditor.OpenMaskEditor command
-    if (eventMatchesCommand(e, 'Comfy.MaskEditor.OpenMaskEditor')) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        toggleEditorBlur();
-        return;
-    }
+        // My node only. Do nothing for normal node's mask editor
+        if (!targetNode) return true;
 
-    // Esc key toggles blur mode (intercept before blur mode pass-through)
-    if (e.key === 'Escape') {
-        // If mask is empty, let dialog close naturally
-        // Or we can long press Esc to force close
-        if (e.repeat || !isMaskNonEmpty()) {
+        // Brush radius adjustment and Esc handling for brush tools
+        if (handleBrushToolKeydown(e)) {
             return;
         }
-        // Mask is non-empty: toggle blur state and prevent dialog from closing
+
+        // Enter blur mode?
+        if (switchMode()) {
+            return;
+        }
+
+        // Non blur more. disable undo/redo shortcuts outside the mask editor
+        if (isUndoRedo) {
+            e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
+            // Don't to this. It will break undoing in the mask editor
+            //e.stopImmediatePropagation(); // Prevent other possible script handling.
+            // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
+            return;
+        }
+
+        // Fast Forward
+
+        // Ctrl+L loads clipspace content into current editor
+        if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            console.log("[slowargo.js] Loading clipspace content...");
+            await loadClipspaceToEditor();
+            // then trigger Fast Forward
+            // return;
+            // Enter to trigger Fast Forward
+        } else if (e.key !== 'Enter') {
+            return;
+        }
+
+        // Enter executes Fast Forward cycle if enabled and mask is not empty
+        if (!editorState.fastForwardModeOn) return;
+        if (editorState.cycleInProgress) return;
+
+        if (!isMaskNonEmpty()) {
+            getToastStore()?.add?.({
+                severity: 'warn',
+                summary: 'Fast Forward Blocked',
+                detail: 'Mask is empty. Draw something on the mask to continue.',
+                life: 3000
+            });
+            console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
+            return;
+        }
+
         e.preventDefault();
         e.stopImmediatePropagation();
-        toggleEditorBlur();
-        return;
+
+        console.log("[slowargo.js] Fast Forward Mode: starting cycle for node", targetNode.id);
+        await executeFastForwardCycle(targetNode);
     }
 
-    // In blur mode, let all keyboard events pass through to main UI
-    if (editorState.isBlurred) return;
-
-    // Brush radius adjustment and Esc handling for brush tools
-    if (handleBrushToolKeydown(e)) {
-        return;
-    }
-
-    // Non blur more. disable undo/redo shortcuts outside the mask editor
-    if (isUndoRedo) {
-        e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
-        // Don't to this. It will break undoing in the mask editor
-        //e.stopImmediatePropagation(); // Prevent other possible script handling.
-        // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
-        return;
-    }
-
-    // Ctrl+L loads clipspace content into current editor
-    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        console.log("[slowargo.js] Loading clipspace content...");
-        await loadClipspaceToEditor();
-        // then trigger Fast Forward
-        // return;
-    // Enter to trigger Fast Forward
-    } else if (e.key !== 'Enter') {
-        return;
-    }
-
-    // Enter executes Fast Forward cycle if enabled and mask is not empty
-    if (!editorState.fastForwardModeOn) return;
-    if (editorState.cycleInProgress) return;
-
-    if (!isMaskNonEmpty()) {
-        getToastStore()?.add?.({
-            severity: 'warn',
-            summary: 'Fast Forward Blocked',
-            detail: 'Mask is empty. Draw something on the mask to continue.',
-            life: 3000
-        });
-        console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
-        return;
-    }
-
-    e.preventDefault();
-    e.stopImmediatePropagation();
-
-    console.log("[slowargo.js] Fast Forward Mode: starting cycle for node", targetNode.id);
-    await executeFastForwardCycle(targetNode);
 }
 
 // === Fast Forward Mode Initialization ===
@@ -634,7 +658,9 @@ export function initFastForwardMode() {
     function onEditorReady(dialog) {
         initialized = true;
         currentDialog = dialog;
-        restoreColorAndAddToggle();
+        if (!restoreColorAndAddToggle()) {
+            return;
+        }
         initBrushToolOverlay();
         initCloneToolEvents();
         initSmudgeToolEvents();
@@ -667,7 +693,7 @@ export function initFastForwardMode() {
             return;
         }
 
-        // Not ready yet — watch dialog subtree until side panel renders
+        // No luck. Not ready yet — watch dialog subtree until side panel renders
         const innerObserver = new MutationObserver(() => {
             const refPanel = dialog.querySelector("div.maskEditor_sidePanel input[type=color]");
             if (refPanel && !document.querySelector(".fast-forward-mode-toggle")) {
@@ -681,35 +707,39 @@ export function initFastForwardMode() {
         });
     }
 
+    function onEditorClose() {
+        initialized = false;
+        console.log("[slowargo.js] Mask editor closed, cleaning up resources");
+
+        // Cleanup all brush tools (clone, smudge, overlay, canvas refs)
+        cleanupAllBrushTools();
+
+        // Remove keyboard event listeners
+        window.removeEventListener('keydown', onMaskEditorKeydown, true);
+        window.removeEventListener('keyup', onMaskEditorKeyup, true);
+
+        // Remove click listener from dialog
+        if (currentDialog && dialogClickHandler) {
+            currentDialog.removeEventListener('click', dialogClickHandler);
+            dialogClickHandler = null;
+        }
+
+        // Cleanup UI elements
+        cleanupFastForwardUI(currentDialog);
+        // Extra - Make GC happy
+        currentDialog.querySelectorAll('canvas').forEach(c => { c.width = 0; c.height = 0; c.parentNode?.removeChild(c);});
+        currentDialog.querySelectorAll('img').forEach(c => { c.src = '';c.parentNode?.removeChild(c); })
+        currentDialog.innerHTML = "";
+        currentDialog = null;
+    }
+
     // Phase 1: Only watch body direct children — triggers when p-dialog-mask is added/removed
     const observer = new MutationObserver(() => {
         const dialog = document.querySelector("body > .p-dialog-mask .mask-editor-dialog");
 
         if (!dialog && initialized) {
             // Editor closed — cleanup resources
-            initialized = false;
-            console.log("[slowargo.js] Mask editor closed, cleaning up resources");
-
-            // Cleanup all brush tools (clone, smudge, overlay, canvas refs)
-            cleanupAllBrushTools();
-
-            // Remove keyboard event listeners
-            window.removeEventListener('keydown', onMaskEditorKeydown, true);
-            window.removeEventListener('keyup', onMaskEditorKeyup, true);
-
-            // Remove click listener from dialog
-            if (currentDialog && dialogClickHandler) {
-                currentDialog.removeEventListener('click', dialogClickHandler);
-                dialogClickHandler = null;
-            }
-
-            // Cleanup UI elements
-            cleanupFastForwardUI(currentDialog);
-            currentDialog.querySelectorAll('canvas').forEach(c => { c.width = 0; c.height = 0; c.parentNode?.removeChild(c);});
-            currentDialog.querySelectorAll('img').forEach(c => { c.src = '';c.parentNode?.removeChild(c); })
-            currentDialog.innerHTML = "";
-            currentDialog = null;
-            return;
+            onEditorClose();
         }
 
         if (dialog && !initialized) {
