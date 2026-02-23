@@ -22,14 +22,92 @@ const editorState = {
         sampleX: 0, sampleY: 0,
         strokeStartX: 0, strokeStartY: 0,
         lastDrawX: 0, lastDrawY: 0,
-        brushRadius: 20,
         isDrawing: false,
         eventsBound: false,
-        overlay: null,
-        baseCanvas: null,   // cached canvases[0]
-        paintCanvas: null,  // cached canvases[1]
+    },
+
+    // Smudge Brush
+    smudgeBrush: {
+        active: false,
+        isDrawing: false,
+        lastDrawX: 0, lastDrawY: 0,
+        carriedBuffer: null,      // Float32Array carrying sampled pixels
+        bufferWidth: 0,
+        bufferHeight: 0,
+        bufferOffsetX: 0,
+        bufferOffsetY: 0,
+        eventsBound: false,
     }
 };
+
+// === Module-level Shared Tool Resources ===
+let brushToolOverlay = null;
+let baseCanvas = null;
+let paintCanvas = null;
+
+// === Brush Tool Functions ===
+
+let globalBrushRadius = 20;
+
+function getBrushRadius() {
+    const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
+    if (rangeInput?.value) {
+        return parseFloat(rangeInput.value);
+    }
+    return globalBrushRadius;
+}
+
+function setBrushRadius(radius) {
+    globalBrushRadius = Math.max(5, Math.min(300, radius));
+}
+
+function initBrushToolOverlay() {
+    const container = document.querySelector('#maskEditorCanvasContainer');
+    if (!container || container.querySelector('#brush-tool-overlay')) return;
+
+    if (getComputedStyle(container).position === 'static') {
+        container.style.position = 'relative';
+    }
+
+    const canvases = container.querySelectorAll('canvas');
+    baseCanvas  = canvases[0];
+    paintCanvas = canvases[1];
+
+    const overlay = document.createElement('canvas');
+    overlay.id = 'brush-tool-overlay';
+    overlay.width  = canvases[0].width;
+    overlay.height = canvases[0].height;
+    container.appendChild(overlay);
+    brushToolOverlay = overlay;
+    console.log("[slowargo.js] Brush tool overlay initialized");
+}
+
+function isPointerInBrushArea(e) {
+    if (!brushToolOverlay) return false;
+    const rect = brushToolOverlay.getBoundingClientRect();
+    return e.clientX >= rect.left && e.clientX <= rect.right &&
+           e.clientY >= rect.top  && e.clientY <= rect.bottom;
+}
+
+function deactivateAllCustomTools() {
+    if (editorState.cloneBrush.active) {
+        editorState.cloneBrush.active = false;
+        editorState.cloneBrush.hasSample = false;
+        updateCloneStyle();
+    }
+    if (editorState.smudgeBrush.active) {
+        editorState.smudgeBrush.active = false;
+        updateSmudgeStyle();
+    }
+    if (brushToolOverlay) {
+        const ctx = brushToolOverlay.getContext('2d');
+        ctx?.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
+    }
+}
+
+function isAnyCustomToolActive() {
+    return editorState.cloneBrush.active || editorState.smudgeBrush.active;
+}
 
 // === Color Memory ===
 const colorMemory = {
@@ -45,12 +123,7 @@ const colorMemory = {
 // === Clone Brush Functions ===
 
 function getCloneBrushRadius() {
-    // Use side panel brush range slider if available, otherwise fallback to internal state
-    const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
-    if (rangeInput?.value) {
-        return parseFloat(rangeInput.value);
-    }
-    return editorState.cloneBrush.brushRadius;
+    return getBrushRadius();
 }
 
 function displayToCanvas(canvas, clientX, clientY) {
@@ -61,34 +134,14 @@ function displayToCanvas(canvas, clientX, clientY) {
     };
 }
 
+// Deprecated: use initBrushToolOverlay() instead
+// Keep this stub for backward compatibility during transition
 function initCloneBrushOverlay() {
-    const container = document.querySelector('#maskEditorCanvasContainer');
-    if (!container || container.querySelector('#clone-brush-overlay')) return;
-
-    // Ensure container is the positioning context for the absolute-positioned overlay
-    if (getComputedStyle(container).position === 'static') {
-        container.style.position = 'relative';
-    }
-
-    // Cache the original canvas references before appending overlay
-    const canvases = container.querySelectorAll('canvas');
-    editorState.cloneBrush.baseCanvas  = canvases[0];
-    editorState.cloneBrush.paintCanvas = canvases[1];
-
-    const overlay = document.createElement('canvas');
-    overlay.id = 'clone-brush-overlay';
-    overlay.width  = canvases[0].width;
-    overlay.height = canvases[0].height;
-    container.appendChild(overlay);
-    editorState.cloneBrush.overlay = overlay;
-    console.log("[slowargo.js] Clone brush overlay initialized");
+    console.log("[slowargo.js] initCloneBrushOverlay deprecated, use initBrushToolOverlay");
 }
 
 function initCloneToolEvents() {
     if (editorState.cloneBrush.eventsBound) return;
-    // Use document capture phase + coordinate hit-testing to bypass
-    // the invisible cursor:none div that sits above the canvas container
-    // and intercepts all pointer events for Vue's brush tools.
     document.addEventListener('pointerdown', onCloneMouseDown, true);
     document.addEventListener('pointermove', onCloneMouseMove, true);
     document.addEventListener('pointerup',   onCloneMouseUp,   true);
@@ -96,29 +149,20 @@ function initCloneToolEvents() {
     console.log("[slowargo.js] Clone tool events bound to document (capture)");
 }
 
-function isPointerInCanvasArea(e) {
-    const overlay = editorState.cloneBrush.overlay;
-    if (!overlay) return false;
-    const rect = overlay.getBoundingClientRect();
-    return e.clientX >= rect.left && e.clientX <= rect.right &&
-           e.clientY >= rect.top  && e.clientY <= rect.bottom;
-}
-
 function onCloneMouseDown(e) {
     if (!editorState.cloneBrush.active) return;
-    if (!isPointerInCanvasArea(e)) return;
+    if (!isPointerInBrushArea(e)) return;
 
     e.stopImmediatePropagation();
     e.preventDefault();
 
-    const overlay = editorState.cloneBrush.overlay;
-    const { cx, cy } = displayToCanvas(overlay, e.clientX, e.clientY);
+    const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
     if (e.altKey) {
         editorState.cloneBrush.hasSample  = true;
         editorState.cloneBrush.sampleX    = cx;
         editorState.cloneBrush.sampleY    = cy;
-        renderOverlay(cx, cy);
+        renderCloneOverlay(cx, cy);
         return;
     }
 
@@ -134,17 +178,17 @@ function onCloneMouseDown(e) {
 
 function onCloneMouseMove(e) {
     if (!editorState.cloneBrush.active) return;
-    if (!isPointerInCanvasArea(e)) return;
+    if (!isPointerInBrushArea(e)) return;
 
-    const overlay = editorState.cloneBrush.overlay;
-    const {cx, cy} = displayToCanvas(overlay, e.clientX, e.clientY);
+    const {cx, cy} = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
     if (editorState.cloneBrush.isDrawing) {
         e.stopImmediatePropagation();
         applyCloneStroke(cx, cy);
     }
-    renderOverlay(cx, cy);
+    renderCloneOverlay(cx, cy);
 }
+
 function onCloneMouseUp(e) {
     if (!editorState.cloneBrush.active || !editorState.cloneBrush.isDrawing) return;
     e.stopImmediatePropagation();
@@ -155,11 +199,9 @@ function onCloneMouseUp(e) {
 }
 
 function applyCloneStroke(cx, cy) {
-    const baseCanvas  = editorState.cloneBrush.baseCanvas;
-    const paintCanvas = editorState.cloneBrush.paintCanvas;
     if (!baseCanvas || !paintCanvas) return;
 
-    const radius = getCloneBrushRadius(); // read once per pointer event
+    const radius = getBrushRadius();
     const step = Math.max(1, radius / 3);
     const dist  = Math.hypot(cx - editorState.cloneBrush.lastDrawX, cy - editorState.cloneBrush.lastDrawY);
     const steps = Math.ceil(dist / step);
@@ -168,14 +210,14 @@ function applyCloneStroke(cx, cy) {
         const t  = i / steps;
         const dx = editorState.cloneBrush.lastDrawX + (cx - editorState.cloneBrush.lastDrawX) * t;
         const dy = editorState.cloneBrush.lastDrawY + (cy - editorState.cloneBrush.lastDrawY) * t;
-        stampClone(baseCanvas, paintCanvas, dx, dy, radius);
+        stampClone(dx, dy, radius);
     }
 
     editorState.cloneBrush.lastDrawX = cx;
     editorState.cloneBrush.lastDrawY = cy;
 }
 
-function stampClone(baseCanvas, paintCanvas, drawX, drawY, radius) {
+function stampClone(drawX, drawY, radius) {
     const r = Math.ceil(radius);
     const sigma = radius * 0.4;
 
@@ -220,13 +262,13 @@ function stampClone(baseCanvas, paintCanvas, drawX, drawY, radius) {
     paintCtx.putImageData(dstData, dstL, dstT);
 }
 
-function renderOverlay(mouseX, mouseY) {
-    if (!editorState.cloneBrush.overlay || !editorState.cloneBrush.hasSample) return;
+function renderCloneOverlay(mouseX, mouseY) {
+    if (!brushToolOverlay || !editorState.cloneBrush.hasSample) return;
 
-    const ctx = editorState.cloneBrush.overlay.getContext('2d');
-    ctx.clearRect(0, 0, editorState.cloneBrush.overlay.width, editorState.cloneBrush.overlay.height);
+    const ctx = brushToolOverlay.getContext('2d');
+    ctx.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
 
-    const radius = getCloneBrushRadius();
+    const radius = getBrushRadius();
     drawCrosshair(ctx, editorState.cloneBrush.sampleX, editorState.cloneBrush.sampleY, '#ff6666', radius);
 
     if (editorState.cloneBrush.isDrawing) {
@@ -273,13 +315,236 @@ function cleanupCloneTool() {
         editorState.cloneBrush.eventsBound = false;
     }
 
-    editorState.cloneBrush.overlay?.remove();
-    editorState.cloneBrush.overlay    = null;
-    editorState.cloneBrush.baseCanvas  = null;
-    editorState.cloneBrush.paintCanvas = null;
     editorState.cloneBrush.active     = false;
     editorState.cloneBrush.hasSample  = false;
     editorState.cloneBrush.isDrawing  = false;
+}
+
+// === Smudge Brush Functions ===
+
+function initSmudgeToolEvents() {
+    if (editorState.smudgeBrush.eventsBound) return;
+    document.addEventListener('pointerdown', onSmudgeMouseDown, true);
+    document.addEventListener('pointermove', onSmudgeMouseMove, true);
+    document.addEventListener('pointerup',   onSmudgeMouseUp,   true);
+    editorState.smudgeBrush.eventsBound = true;
+    console.log("[slowargo.js] Smudge tool events bound to document (capture)");
+}
+
+function onSmudgeMouseDown(e) {
+    if (!editorState.smudgeBrush.active) return;
+    if (!isPointerInBrushArea(e)) return;
+
+    e.stopImmediatePropagation();
+    e.preventDefault();
+
+    const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+
+    // Sample composite at brush location
+    const radius = getBrushRadius();
+    const carried = sampleComposite(cx, cy, radius);
+    if (!carried) return;
+
+    editorState.smudgeBrush.carriedBuffer = carried;
+    editorState.smudgeBrush.isDrawing = true;
+    editorState.smudgeBrush.lastDrawX = cx;
+    editorState.smudgeBrush.lastDrawY = cy;
+
+    applySmudgeStroke(cx, cy);
+}
+
+function onSmudgeMouseMove(e) {
+    if (!editorState.smudgeBrush.active) return;
+    if (!isPointerInBrushArea(e)) return;
+
+    const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+
+    if (editorState.smudgeBrush.isDrawing) {
+        e.stopImmediatePropagation();
+        applySmudgeStroke(cx, cy);
+    }
+    renderSmudgeOverlay(cx, cy);
+}
+
+function onSmudgeMouseUp(e) {
+    if (!editorState.smudgeBrush.active || !editorState.smudgeBrush.isDrawing) return;
+    e.stopImmediatePropagation();
+    editorState.smudgeBrush.isDrawing = false;
+
+    // Clear carried buffer
+    editorState.smudgeBrush.carriedBuffer = null;
+
+    const store = getMaskEditorStore();
+    store?.canvasHistory?.saveState?.();
+}
+
+function sampleComposite(centerX, centerY, radius) {
+    const r = Math.ceil(radius);
+    const left   = Math.max(0, Math.round(centerX - r));
+    const top    = Math.max(0, Math.round(centerY - r));
+    const right  = Math.min(baseCanvas.width,  Math.round(centerX + r));
+    const bottom = Math.min(baseCanvas.height, Math.round(centerY + r));
+    if (left >= right || top >= bottom) return null;
+
+    const w = right - left;
+    const h = bottom - top;
+
+    const baseCtx  = baseCanvas.getContext('2d',  { willReadFrequently: true });
+    const paintCtx = paintCanvas.getContext('2d', { willReadFrequently: true });
+    const baseData  = baseCtx.getImageData(left, top, w, h);
+    const paintData = paintCtx.getImageData(left, top, w, h);
+
+    // Composite: paint over base
+    const composite = new Float32Array(w * h * 4);
+    for (let i = 0; i < w * h * 4; i += 4) {
+        const pa = paintData.data[i+3] / 255;
+        composite[i]   = paintData.data[i]   * pa + baseData.data[i]   * (1 - pa);
+        composite[i+1] = paintData.data[i+1] * pa + baseData.data[i+1] * (1 - pa);
+        composite[i+2] = paintData.data[i+2] * pa + baseData.data[i+2] * (1 - pa);
+        composite[i+3] = Math.max(paintData.data[i+3], baseData.data[i+3]);
+    }
+
+    return {
+        data: composite,
+        width: w,
+        height: h,
+        offsetX: left,
+        offsetY: top
+    };
+}
+
+function applySmudgeStroke(cx, cy) {
+    if (!baseCanvas || !paintCanvas) return;
+
+    const radius = getBrushRadius();
+    const step = Math.max(1, radius / 3);
+    const dist  = Math.hypot(cx - editorState.smudgeBrush.lastDrawX, cy - editorState.smudgeBrush.lastDrawY);
+    const steps = Math.ceil(dist / step);
+
+    for (let i = 1; i <= steps; i++) {
+        const t  = i / steps;
+        const dx = editorState.smudgeBrush.lastDrawX + (cx - editorState.smudgeBrush.lastDrawX) * t;
+        const dy = editorState.smudgeBrush.lastDrawY + (cy - editorState.smudgeBrush.lastDrawY) * t;
+        stampSmudge(dx, dy, radius);
+    }
+
+    editorState.smudgeBrush.lastDrawX = cx;
+    editorState.smudgeBrush.lastDrawY = cy;
+}
+
+const SMUDGE_STRENGTH = 0.5;
+
+function stampSmudge(drawX, drawY, radius) {
+    const r = Math.ceil(radius);
+    const sigma = radius * 0.4;
+
+    const dstL = Math.max(0, Math.round(drawX - r));
+    const dstT = Math.max(0, Math.round(drawY - r));
+    const dstR = Math.min(paintCanvas.width,  Math.round(drawX + r));
+    const dstB = Math.min(paintCanvas.height, Math.round(drawY + r));
+    if (dstL >= dstR || dstT >= dstB) return;
+
+    const w = dstR - dstL;
+    const h = dstB - dstT;
+
+    const baseCtx  = baseCanvas.getContext('2d',  { willReadFrequently: true });
+    const paintCtx = paintCanvas.getContext('2d', { willReadFrequently: true });
+    const baseData  = baseCtx.getImageData(dstL, dstT, w, h);
+    const paintData = paintCtx.getImageData(dstL, dstT, w, h);
+
+    const carried = editorState.smudgeBrush.carriedBuffer;
+    if (!carried || !carried.data) return;
+
+    const cb = carried.data;
+    const cw = carried.width;
+    const ch = carried.height;
+    const cox = carried.offsetX;
+    const coy = carried.offsetY;
+
+    for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+            const canvasX = dstL + px;
+            const canvasY = dstT + py;
+
+            const dx = canvasX - drawX;
+            const dy = canvasY - drawY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > radius) continue;
+
+            const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+            const s = SMUDGE_STRENGTH * weight;
+
+            const di = (py * w + px) * 4;
+
+            // Composite destination
+            const pa = paintData.data[di+3] / 255;
+            const destR = paintData.data[di]   * pa + baseData.data[di]   * (1 - pa);
+            const destG = paintData.data[di+1] * pa + baseData.data[di+1] * (1 - pa);
+            const destB = paintData.data[di+2] * pa + baseData.data[di+2] * (1 - pa);
+            const destA = Math.max(paintData.data[di+3], baseData.data[di+3]);
+
+            // Map to carried buffer
+            const cbx = canvasX - cox;
+            const cby = canvasY - coy;
+
+            if (cbx >= 0 && cbx < cw && cby >= 0 && cby < ch) {
+                const ci = (cby * cw + cbx) * 4;
+
+                // Blend: output = carried * s + dest * (1 - s)
+                const outR = cb[ci]   * s + destR * (1 - s);
+                const outG = cb[ci+1] * s + destG * (1 - s);
+                const outB = cb[ci+2] * s + destB * (1 - s);
+                const outA = cb[ci+3] * s + destA * (1 - s);
+
+                paintData.data[di]   = Math.round(outR);
+                paintData.data[di+1] = Math.round(outG);
+                paintData.data[di+2] = Math.round(outB);
+                paintData.data[di+3] = Math.round(outA);
+
+                // Update carried (progressive mixing)
+                cb[ci]   = outR;
+                cb[ci+1] = outG;
+                cb[ci+2] = outB;
+                cb[ci+3] = outA;
+            }
+        }
+    }
+
+    paintCtx.putImageData(paintData, dstL, dstT);
+}
+
+function renderSmudgeOverlay(mouseX, mouseY) {
+    if (!brushToolOverlay || !editorState.smudgeBrush.isDrawing) return;
+
+    const ctx = brushToolOverlay.getContext('2d');
+    ctx.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
+
+    const radius = getBrushRadius();
+
+    // Brush circle in orange
+    ctx.beginPath();
+    ctx.arc(mouseX, mouseY, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 165, 0, 0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+}
+
+function cleanupSmudgeTool() {
+    if (editorState.smudgeBrush.isDrawing) {
+        getMaskEditorStore()?.canvasHistory?.saveState?.();
+        editorState.smudgeBrush.isDrawing = false;
+    }
+
+    if (editorState.smudgeBrush.eventsBound) {
+        document.removeEventListener('pointerdown', onSmudgeMouseDown, true);
+        document.removeEventListener('pointermove', onSmudgeMouseMove, true);
+        document.removeEventListener('pointerup',   onSmudgeMouseUp,   true);
+        editorState.smudgeBrush.eventsBound = false;
+    }
+
+    editorState.smudgeBrush.carriedBuffer = null;
+    editorState.smudgeBrush.active = false;
+    editorState.smudgeBrush.isDrawing = false;
 }
 
 // === Load Clipspace Content to Current Editor ===
@@ -751,23 +1016,58 @@ function addFastForwardToggleButton() {
     }
 
     cloneBtn.addEventListener("click", () => {
-        editorState.cloneBrush.active = !editorState.cloneBrush.active;
-        updateCloneStyle();
-        if (editorState.cloneBrush.overlay) {
-            editorState.cloneBrush.overlay.classList.toggle('active', editorState.cloneBrush.active);
+        const willActivate = !editorState.cloneBrush.active;
+        deactivateAllCustomTools();
+        if (willActivate) {
+            editorState.cloneBrush.active = true;
+            updateCloneStyle();
         }
-        if (!editorState.cloneBrush.active) {
-            const ctx = editorState.cloneBrush.overlay?.getContext('2d');
-            ctx?.clearRect(0, 0, editorState.cloneBrush.overlay.width, editorState.cloneBrush.overlay.height);
-            editorState.cloneBrush.hasSample = false;
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
         }
         console.log("[slowargo.js] Clone Brush:", editorState.cloneBrush.active ? "enabled" : "disabled");
+    });
+
+    // Create Smudge Brush button
+    const smudgeBtn = document.createElement("button");
+    smudgeBtn.className = "fast-forward-mode-toggle";
+    smudgeBtn.id = "smudge-brush-button";
+    smudgeBtn.title = "Smudge Brush: Drag to smudge pixels";
+    const smudgeIcon = document.createElement("i");
+    smudgeIcon.className = "pi pi-arrow-right-arrow-left";
+    smudgeBtn.appendChild(smudgeIcon);
+    const smudgeText = document.createElement("span");
+    smudgeText.textContent = "Smudge";
+    smudgeBtn.appendChild(smudgeText);
+
+    function updateSmudgeStyle() {
+        if (editorState.smudgeBrush.active) {
+            smudgeBtn.classList.add("enabled");
+            smudgeBtn.classList.remove("disabled");
+        } else {
+            smudgeBtn.classList.add("disabled");
+            smudgeBtn.classList.remove("enabled");
+        }
+    }
+
+    smudgeBtn.addEventListener("click", () => {
+        const willActivate = !editorState.smudgeBrush.active;
+        deactivateAllCustomTools();
+        if (willActivate) {
+            editorState.smudgeBrush.active = true;
+            updateSmudgeStyle();
+        }
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
+        }
+        console.log("[slowargo.js] Smudge Brush:", editorState.smudgeBrush.active ? "enabled" : "disabled");
     });
 
     buttonContainer.appendChild(toggleBtn);
     buttonContainer.appendChild(reloadMaskOnlyBtn);
     buttonContainer.appendChild(reloadAllBtn);
     buttonContainer.appendChild(cloneBtn);
+    buttonContainer.appendChild(smudgeBtn);
     buttonContainer.appendChild(blurBtn);
 
     updateToggleStyle();
@@ -784,35 +1084,41 @@ export function initFastForwardMode() {
     window.addEventListener('keydown', async function(e) {
         if (!ComfyApp.maskeditor_is_opended()) return;
 
-        // Clone brush radius adjustment
-        if (editorState.cloneBrush.active) {
+        // Brush radius adjustment for any active custom tool
+        if (isAnyCustomToolActive()) {
             const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
             if (e.key === '[') {
                 e.preventDefault();
-                const currentRadius = getCloneBrushRadius();
+                const currentRadius = getBrushRadius();
                 const newRadius = Math.max(5, currentRadius - 5);
+                setBrushRadius(newRadius);
                 if (rangeInput) {
                     rangeInput.value = newRadius;
                     rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
                     rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
-                } else {
-                    editorState.cloneBrush.brushRadius = newRadius;
                 }
-                renderOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
+                if (editorState.cloneBrush.active) {
+                    renderCloneOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
+                } else if (editorState.smudgeBrush.active) {
+                    renderSmudgeOverlay(editorState.smudgeBrush.lastDrawX, editorState.smudgeBrush.lastDrawY);
+                }
                 return;
             }
             if (e.key === ']') {
                 e.preventDefault();
-                const currentRadius = getCloneBrushRadius();
+                const currentRadius = getBrushRadius();
                 const newRadius = Math.min(300, currentRadius + 5);
+                setBrushRadius(newRadius);
                 if (rangeInput) {
                     rangeInput.value = newRadius;
                     rangeInput.dispatchEvent(new Event('input', { bubbles: true }));
                     rangeInput.dispatchEvent(new Event('change', { bubbles: true }));
-                } else {
-                    editorState.cloneBrush.brushRadius = newRadius;
                 }
-                renderOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
+                if (editorState.cloneBrush.active) {
+                    renderCloneOverlay(editorState.cloneBrush.lastDrawX, editorState.cloneBrush.lastDrawY);
+                } else if (editorState.smudgeBrush.active) {
+                    renderSmudgeOverlay(editorState.smudgeBrush.lastDrawX, editorState.smudgeBrush.lastDrawY);
+                }
                 return;
             }
         }
@@ -901,8 +1207,9 @@ export function initFastForwardMode() {
         initialized = true;
         currentDialog = dialog;
         restoreColorAndAddToggle();
-        initCloneBrushOverlay();
+        initBrushToolOverlay();
         initCloneToolEvents();
+        initSmudgeToolEvents();
 
         // Add click listener to toggle blur state when clicking on blurred editor
         if (!dialog.dataset.blurListenerAdded) {
@@ -953,6 +1260,15 @@ export function initFastForwardMode() {
 
             // Cleanup clone tool
             cleanupCloneTool();
+
+            // Cleanup smudge tool
+            cleanupSmudgeTool();
+
+            // Cleanup shared overlay resources
+            brushToolOverlay?.remove();
+            brushToolOverlay = null;
+            baseCanvas = null;
+            paintCanvas = null;
 
             // Remove click listener from dialog
             if (currentDialog && dialogClickHandler) {
