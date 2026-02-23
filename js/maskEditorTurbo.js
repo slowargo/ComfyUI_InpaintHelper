@@ -1,7 +1,7 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { loadCSS, sleep, getKeybindingStore, getMaskEditorStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
+import { loadCSS, sleep, getMaskEditorStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
 
 loadCSS(import.meta.url, "./maskEditorTurbo.css");
 
@@ -57,6 +57,10 @@ function setBrushRadius(radius) {
     globalBrushRadius = Math.max(5, Math.min(300, radius));
 }
 
+// 初始化 BrushToolOverlay。Overlay 是一个共享的覆盖层画布，为 Clone Brush 和 Smudge Brush 提供两个核心功能：
+// 1. 事件捕获层: 当 Clone 或 Smudge 工具激活时，覆盖层捕获所有鼠标/指针事件，阻止事件传递到 mask editor 的原生绘制工具。
+// 2. 视觉反馈绘制: 十字准星、虚线连接、笔刷圆圈等
+// 3. 坐标映射基准: 覆盖层作为坐标转换的参考对象
 function initBrushToolOverlay() {
     const container = document.querySelector('#maskEditorCanvasContainer');
     if (!container || container.querySelector('#brush-tool-overlay')) return;
@@ -75,9 +79,10 @@ function initBrushToolOverlay() {
     overlay.height = canvases[0].height;
     container.appendChild(overlay);
     brushToolOverlay = overlay;
-    console.log("[slowargo.js] Brush tool overlay initialized");
+    // console.log("[slowargo.js] Brush tool overlay initialized");
 }
 
+// Pointer 事件的护栏。
 function isPointerInBrushArea(e) {
     if (!brushToolOverlay) return false;
     const rect = brushToolOverlay.getBoundingClientRect();
@@ -121,22 +126,15 @@ function isAnyCustomToolActive() {
     return editorState.cloneBrush.active || editorState.smudgeBrush.active;
 }
 
-// === Color Memory ===
-const colorMemory = {
-    key: "slowargo_fast_forward_color",
-    save: function(hexColor) {
-        localStorage.setItem(this.key, hexColor);
-    },
-    load: function() {
-        return localStorage.getItem(this.key);
-    }
-};
-
 // === Clone Brush Functions ===
 
+// 进行坐标映射。需要进行坐标映射是因为 Canvas 的显示尺寸与实际像素尺寸可能不一致（画布可能以缩小/放大状态显示)
 function displayToCanvas(canvas, clientX, clientY) {
+    // 获取 CSS 显示区域
     const rect = canvas.getBoundingClientRect();
     return {
+        // 计算鼠标在显示区域内的相对位置，再按比例转换为像素坐标
+        // 例如缩小到 50%, rect.width 为 canvas.width 的一半，下面公式就相当于 offset * 2，放大回正确的像素位置
         cx: (clientX - rect.left) * canvas.width  / rect.width,
         cy: (clientY - rect.top)  * canvas.height / rect.height,
     };
@@ -200,18 +198,25 @@ function onCloneMouseUp(e) {
     store?.canvasHistory?.saveState?.();
 }
 
+// Clone Brush 的笔触插值函数，解决快速移动鼠标时绘制不连续的问题
 function applyCloneStroke(cx, cy) {
     if (!baseCanvas || !paintCanvas) return;
 
     const radius = getBrushRadius();
+    // 步长与笔刷半径成正比, 确保至少为 1 像素, radius/3 保证相邻 stamp 有足够重叠
     const step = Math.max(1, radius / 3);
+    // 两点间直线距离
     const dist  = Math.hypot(cx - editorState.cloneBrush.lastDrawX, cy - editorState.cloneBrush.lastDrawY);
+    // 需要的插值步数
     const steps = Math.ceil(dist / step);
 
+    // 线性插值填充间隙
     for (let i = 1; i <= steps; i++) {
-        const t  = i / steps;
+        const t  = i / steps; // 0.0 ~ 1.0 的插值因子
+        // 在 lastDraw 和 current 之间均匀分布 stamp
         const dx = editorState.cloneBrush.lastDrawX + (cx - editorState.cloneBrush.lastDrawX) * t;
         const dy = editorState.cloneBrush.lastDrawY + (cy - editorState.cloneBrush.lastDrawY) * t;
+        // 在插值点执行克隆
         stampClone(dx, dy, radius);
     }
 
@@ -279,8 +284,8 @@ function renderCloneOverlay(mouseX, mouseY) {
         drawCrosshair(ctx, trackedX, trackedY, 'rgba(255, 102, 102, 0.7)', radius);
 
         ctx.setLineDash([4, 4]);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(trackedX, trackedY);
         ctx.lineTo(mouseX, mouseY);
@@ -547,6 +552,17 @@ function cleanupSmudgeTool() {
     editorState.smudgeBrush.active = false;
     editorState.smudgeBrush.isDrawing = false;
 }
+
+// === Color Memory ===
+const colorMemory = {
+    key: "slowargo_fast_forward_color",
+    save: function(hexColor) {
+        localStorage.setItem(this.key, hexColor);
+    },
+    load: function() {
+        return localStorage.getItem(this.key);
+    }
+};
 
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor(reloadMaskOnly = false) {
