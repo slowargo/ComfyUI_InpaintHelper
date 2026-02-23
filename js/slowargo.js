@@ -48,16 +48,18 @@ app.registerExtension({
                 return false;
             }
         }
+        // Update: Make this feature mask-editor-turbo only. The handler is moved to mask-editor-turbo.js to enable
+        //   ctrl+z/ctrl+y works in blur mode.
         // Prevent accidentally undoing canvas textarea when pressing Ctrl+Z in mask editor
-        window.addEventListener('keydown', function(e) {
-            // Check if Ctrl+Z (Cmd+Z on Mac) is pressed in mask editor
-            if ((e.ctrlKey || e.metaKey) && e.key === 'z' && document.querySelector("div.maskEditor_sidePanel")) {
-                e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
-                // Don't to this. It will break undoing in the mask editor
-                //e.stopImmediatePropagation(); // Prevent other possible script handling.
-                // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
-            }
-        }, true); // true to ensure interception at the capture phase
+        // window.addEventListener('keydown', function(e) {
+        //     // Check if Ctrl+Z (Cmd+Z on Mac) is pressed in mask editor
+        //     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && document.querySelector("div.maskEditor_sidePanel")) {
+        //         e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
+        //         // Don't to this. It will break undoing in the mask editor
+        //         //e.stopImmediatePropagation(); // Prevent other possible script handling.
+        //         // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
+        //     }
+        // }, true); // true to ensure interception at the capture phase
 
         // Initialize Fast Forward Mode
         initFastForwardMode();

@@ -504,33 +504,44 @@ function addFastForwardToggleButton() {
 // Keyboard event handlers for mask editor
 function onMaskEditorKeyup(e) {
     if (!ComfyApp.maskeditor_is_opended()) return;
+
+    // In blur mode, let all keyboard events pass through to main UI
+    if (editorState.isBlurred) return;
+
     handleBrushToolKeyup(e);
 }
 
 async function onMaskEditorKeydown(e) {
     if (!ComfyApp.maskeditor_is_opended()) return;
 
-    // Block undo/redo shortcuts in blur mode to prevent useKeyboard.ts from handling them
+    let targetNode = getFastForwardTargetNode();
+
+    const isUndoRedo = (e.ctrlKey || e.metaKey) &&
+        (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y');
+
+    // 针对 blur 模式的特殊处理
+    // 因为 editor 未关闭，src/composables/maskeditor/useKeyboard.ts 的 event handler 仍然有效，在主界面操作时默认会走
+    //   editor 的键盘事件 handler，即空格、CTRL+Z、CTRL+Y 会被拦截
+    // 仅仅阻止事件传播到 useKeyboard.ts 也不够完美。此时 maskeditor_is_opended, 因此主界面的 src/scripts/changeTracker.ts 也是
+    //   不工作的，无法使用快捷键触发 undo/redo。暂时无解，但允许 default handler 至少让 textarea 的 undo/redo 可以工作
     if (editorState.isBlurred) {
-        const isUndoRedo = (e.ctrlKey || e.metaKey) &&
-            (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y');
-        if (isUndoRedo) {
-            e.preventDefault();
+        // 进入 blur 模式后可能选了其他非LoadRecentImagePlusV1节点，getFastForwardTargetNode() 会返回 null
+        // 让 targetNode 有值避免下面 return，继续走后面的 Escape 键处理函数，退出 blur 模式
+        targetNode = app.graph.getNodeById(editorState.sourceNodeId);
+
+        // 阻止空格键继续传播到 useKeyboard.ts, 但 default handler 仍然允许执行，从而允许在主界面文本框输入空格
+        if (e.key === ' ') {
             e.stopImmediatePropagation();
             return;
         }
-    }
 
-    // Brush radius adjustment and Esc handling for brush tools
-    if (handleBrushToolKeydown(e)) {
-        return;
-    }
-
-    let targetNode = getFastForwardTargetNode();
-
-    if (editorState.isBlurred) {
-        // 进入 blur 模式后可能选了其他节点，让 targetNode 有值走后面的 Escape 键处理函数，退出 blur 模式
-        targetNode = app.graph.getNodeById(editorState.sourceNodeId);
+        // Block undo/redo shortcuts in blur mode to prevent useKeyboard.ts from handling them
+        // Allow default handler to enable undo/redo work in textarea in the main interface
+        if (isUndoRedo) {
+            // e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
     }
 
     if (!targetNode) return;
@@ -559,6 +570,11 @@ async function onMaskEditorKeydown(e) {
     // In blur mode, let all keyboard events pass through to main UI
     if (editorState.isBlurred) return;
 
+    // Brush radius adjustment and Esc handling for brush tools
+    if (handleBrushToolKeydown(e)) {
+        return;
+    }
+
     // Ctrl+L loads clipspace content into current editor
     if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
         e.preventDefault();
@@ -567,6 +583,15 @@ async function onMaskEditorKeydown(e) {
         await loadClipspaceToEditor();
         return;
     }
+
+    // Non blur more. disable undo/redo shortcuts outside the mask editor
+    if (isUndoRedo) {
+        e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
+        // Don't to this. It will break undoing in the mask editor
+        //e.stopImmediatePropagation(); // Prevent other possible script handling.
+        // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
+    }
+
 
     // Enter executes Fast Forward cycle if enabled and mask is not empty
     if (e.key !== 'Enter') return;

@@ -830,12 +830,13 @@ function handleBrushToolKeydown(e) {
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeyup(e) {
-    if (!isAnyCustomToolActive()) return false;
-
-    if (e.key === ' ') {
+    if (isSpacePressed && e.key === ' ') {
+        // always exit pan mode
         isSpacePressed = false;
         return false;
     }
+
+    if (!isAnyCustomToolActive()) return false;
 
     return false;
 }
