@@ -1,7 +1,7 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { loadCSS, sleep, getKeybindingStore, getMaskEditorStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
+import { loadCSS, sleep, getMaskEditorStore, getToastStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
 import {
     initBrushToolOverlay,
     updateCloneStyle,
@@ -576,30 +576,39 @@ async function onMaskEditorKeydown(e) {
         return;
     }
 
-    // Ctrl+L loads clipspace content into current editor
-    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        console.log("[slowargo.js] Loading clipspace content...");
-        await loadClipspaceToEditor();
-        return;
-    }
-
     // Non blur more. disable undo/redo shortcuts outside the mask editor
     if (isUndoRedo) {
         e.preventDefault(); // Prevent browser's default undo behavior (textarea undo)
         // Don't to this. It will break undoing in the mask editor
         //e.stopImmediatePropagation(); // Prevent other possible script handling.
         // console.log('[slowargo.js] preventDefault for Ctrl+Z ');
+        return;
     }
 
+    // Ctrl+L loads clipspace content into current editor
+    if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        console.log("[slowargo.js] Loading clipspace content...");
+        await loadClipspaceToEditor();
+        // then trigger Fast Forward
+        // return;
+    // Enter to trigger Fast Forward
+    } else if (e.key !== 'Enter') {
+        return;
+    }
 
     // Enter executes Fast Forward cycle if enabled and mask is not empty
-    if (e.key !== 'Enter') return;
     if (!editorState.fastForwardModeOn) return;
     if (editorState.cycleInProgress) return;
 
     if (!isMaskNonEmpty()) {
+        getToastStore()?.add?.({
+            severity: 'warn',
+            summary: 'Fast Forward Blocked',
+            detail: 'Mask is empty. Draw something on the mask to continue.',
+            life: 3000
+        });
         console.log("[slowargo.js] Fast Forward Mode: mask is empty, skipping");
         return;
     }
