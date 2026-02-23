@@ -134,6 +134,41 @@ app.registerExtension({
             //     return result;
             // }
 
+            // Visual alert for float_ovr when value > 0 (indicating override is active)
+            const ALERT_OUTLINE_COLOR = "#ffaa00";
+            const ALERT_BG_COLOR = "#554400";
+
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function() {
+                const result = origOnNodeCreated?.apply(this, arguments);
+
+                const floatOvrWidget = this.widgets?.find(w => w.name === "float_ovr");
+                if (floatOvrWidget) {
+                    const origDrawWidget = floatOvrWidget.drawWidget;
+                    floatOvrWidget.drawWidget = function(ctx, options) {
+                        if (parseFloat(this.value) > 0) {
+                            // Override widget colors
+                            Object.defineProperty(this, 'outline_color', { value: ALERT_OUTLINE_COLOR, configurable: true });
+                            Object.defineProperty(this, 'background_color', { value: ALERT_BG_COLOR, configurable: true });
+                        }
+                        const result = origDrawWidget.apply(this, arguments);
+                        // Restore. So it won't change colors next time if the value is 0
+                        delete this.outline_color;
+                        delete this.background_color;
+                        return result;
+                    };
+
+                    const origOnConfigure = this.onConfigure;
+                    this.onConfigure = function(info) {
+                        const result = origOnConfigure?.apply(this, arguments);
+                        app.graph.setDirtyCanvas(true, true);
+                        return result;
+                    };
+                }
+
+                return result;
+            };
+
         } else if (nodeType?.comfyClass == "LoadImageFromOutputsPlus") { // deprecated V3 extension
             console.log("[slowargo.js]", nodeData)
             console.log("[slowargo.js]", nodeType)
