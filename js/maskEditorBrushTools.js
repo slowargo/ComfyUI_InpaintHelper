@@ -731,7 +731,7 @@ function createCloneButton() {
     const cloneBtn = document.createElement("button");
     cloneBtn.className = "fast-forward-mode-toggle";
     cloneBtn.id = "clone-brush-button";
-    cloneBtn.title = "Clone Brush: Alt+Click to set source, drag to paint";
+    cloneBtn.title = "Clone Brush (C): Alt+Click to set source, drag to paint";
 
     const cloneIcon = document.createElement("i");
     cloneIcon.className = "pi pi-clone";
@@ -769,7 +769,7 @@ function createSmudgeButton() {
     const smudgeBtn = document.createElement("button");
     smudgeBtn.className = "fast-forward-mode-toggle";
     smudgeBtn.id = "smudge-brush-button";
-    smudgeBtn.title = "Smudge Brush: Drag to smudge pixels";
+    smudgeBtn.title = "Smudge Brush (S): Drag to smudge pixels";
 
     const smudgeIcon = document.createElement("i");
     smudgeIcon.className = "pi pi-arrow-right-arrow-left";
@@ -802,18 +802,52 @@ function createSmudgeButton() {
 
 /**
  * Handle keyboard events for brush tools.
- * Currently handles Esc to deactivate tools, Space to allow mask editor pan.
+ * Currently handles Esc to deactivate tools, Space to allow mask editor pan,
+ * 'C' to toggle Clone Brush, 'S' to toggle Smudge Brush.
  * @param {KeyboardEvent} e - The keyboard event
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeydown(e) {
-    if (!isAnyCustomToolActive()) return false;
-
-    // Track space key for allowing mask editor pan
+    // Track space key for allowing mask editor pan (always track, even if no tool active)
     if (e.key === ' ') {
         isSpacePressed = true;
         return false; // Don't intercept, let mask editor handle it
     }
+
+    // 'C' key to toggle Clone Brush (works even when no tool is active)
+    if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const willActivate = !editorState.cloneBrush.active;
+        deactivateAllCustomTools();
+        if (willActivate) {
+            editorState.cloneBrush.active = true;
+            updateCloneStyle();
+        }
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
+        }
+        return true;
+    }
+
+    // 'S' key to toggle Smudge Brush (works even when no tool is active)
+    if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const willActivate = !editorState.smudgeBrush.active;
+        deactivateAllCustomTools();
+        if (willActivate) {
+            editorState.smudgeBrush.active = true;
+            updateSmudgeStyle();
+        }
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
+        }
+        return true;
+    }
+
+    // Early return if no custom tool is active (below shortcuts require active tool)
+    if (!isAnyCustomToolActive()) return false;
 
     // Esc to deactivate all custom tools
     if (e.key === 'Escape') {

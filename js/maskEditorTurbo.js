@@ -477,7 +477,7 @@ function addFastForwardToggleButton() {
     // Create Blur toggle button (clear → blur)
     const blurBtn = document.createElement("button");
     blurBtn.className = "reload-mask-button";
-    blurBtn.title = "Blur Mode: Minimize editor to left side and access main interface";
+    blurBtn.title = "Blur Mode (Esc): Minimize editor to left side and access main interface";
     const blurIcon = document.createElement("i");
     blurIcon.className = "pi pi-eye-slash";
     blurBtn.appendChild(blurIcon);
@@ -493,10 +493,10 @@ function addFastForwardToggleButton() {
     const smudgeBtn = createSmudgeButton();
 
     buttonContainer.appendChild(toggleBtn);
-    buttonContainer.appendChild(reloadMaskOnlyBtn);
-    buttonContainer.appendChild(reloadAllBtn);
     buttonContainer.appendChild(cloneBtn);
     buttonContainer.appendChild(smudgeBtn);
+    buttonContainer.appendChild(reloadMaskOnlyBtn);
+    buttonContainer.appendChild(reloadAllBtn);
     buttonContainer.appendChild(blurBtn);
 
     updateToggleStyle();
