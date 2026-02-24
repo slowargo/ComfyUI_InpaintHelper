@@ -207,7 +207,7 @@ function onCloneMouseDown(e) {
 
     const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
-    if (e.altKey) {
+    if (e.altKey || !editorState.cloneBrush.hasSample) {
         editorState.cloneBrush.hasSample  = true;
         editorState.cloneBrush.sampleX    = cx;
         editorState.cloneBrush.sampleY    = cy;
