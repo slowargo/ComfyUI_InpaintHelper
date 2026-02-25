@@ -6,13 +6,12 @@ let sharedBaseCanvas = null;
 let sharedPaintCanvas = null;
 
 /**
- * 获取共享的 overlay 画布
+ * 设置共享的 overlay 画布（当 overlay 重新创建时调用）
  */
-function getSharedOverlay() {
-    if (!sharedOverlay) {
-        sharedOverlay = document.querySelector('#brush-tool-overlay');
-    }
-    return sharedOverlay;
+function setSharedOverlay(overlay) {
+    sharedOverlay = overlay;
+    sharedBaseCanvas = null;
+    sharedPaintCanvas = null;
 }
 
 /**
@@ -72,7 +71,10 @@ const transformToolState = {
     tempCanvas: null,
 
     // 事件绑定状态
-    eventsBound: false
+    eventsBound: false,
+
+    // 最后的鼠标位置
+    lastMousePos: null
 };
 
 // === Math Utilities ===
@@ -492,7 +494,7 @@ function getCursorForHandle(handle) {
  * 更新光标状态
  */
 function updateCursor(pos) {
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (!overlay) return;
 
     if (transformToolState.stage === 'selecting') {
@@ -542,7 +544,7 @@ function updateCursor(pos) {
  * 重置光标为默认
  */
 function resetCursor() {
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (overlay) {
         overlay.style.cursor = '';
     }
@@ -569,7 +571,7 @@ function onTransformPointerDown(e) {
     if (!isTransformActive()) return;
 
     // 获取共享资源
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (!overlay) return;
 
     // 检查是否在画布区域内
@@ -601,7 +603,11 @@ function onTransformPointerDown(e) {
         transformToolState.stage = 'selecting';
         startSelection(pos);
     } else if (transformToolState.stage === 'selecting') {
-        // 继续框选或开始新框选
+        // 继续框选或开始新框选 (just in case)
+        startSelection(pos);
+    } else if (transformToolState.stage === 'idle') {
+        // 从 idle 进入 selecting
+        transformToolState.stage = 'selecting';
         startSelection(pos);
     }
 }
@@ -612,7 +618,7 @@ function onTransformPointerDown(e) {
 function onTransformPointerMove(e) {
     if (!isTransformActive()) return;
 
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (!overlay) return;
 
     const pos = displayToCanvas(overlay, e.clientX, e.clientY);
@@ -661,7 +667,7 @@ function startSelection(pos) {
 function updateSelection(pos) {
     if (!selectionStart) return;
 
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (!overlay) return;
 
     const ctx = overlay.getContext('2d');
@@ -778,7 +784,7 @@ function cancelSelection() {
     selectionStart = null;
     setBaseLayerDimmed(false);
     transformToolState.stage = 'idle';
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (overlay) {
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -798,7 +804,7 @@ function startDrag(type, pos, targetIndex = -1) {
         targetIndex: targetIndex,
         startMouse: { x: pos.x, y: pos.y },
         startTransform: {
-            corners: [...transformToolState.transform.corners]
+            corners: transformToolState.transform.corners.map(c => ({ x: c.x, y: c.y }))
         }
     };
 }
@@ -952,7 +958,7 @@ function applyTransform() {
  * 渲染 Transform 模式
  */
 function renderTransforming() {
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (!overlay || transformToolState.stage !== 'transforming') return;
 
     const ctx = overlay.getContext('2d');
@@ -1076,7 +1082,7 @@ function clearSelection() {
     }
 
     // 清空 overlay
-    const overlay = getSharedOverlay();
+    const overlay = sharedOverlay;
     if (overlay) {
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -1156,6 +1162,7 @@ export {
     cleanupTransform,
     isTransformActive,
     handleTransformKeydown,
+    setSharedOverlay,
 
     // 渲染
     renderTransforming

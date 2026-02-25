@@ -4,7 +4,8 @@ import {
     cleanupTransform,
     isTransformActive,
     handleTransformKeydown,
-    initTransformToolEvents
+    initTransformToolEvents,
+    setSharedOverlay
 } from "./maskEditorBrushToolsTransform.js";
 
 // === Editor State ===
@@ -91,6 +92,7 @@ function initBrushToolOverlay() {
     overlay.height = canvases[0].height;
     container.appendChild(overlay);
     brushToolOverlay = overlay;
+    setSharedOverlay(overlay);
     // console.log("[slowargo.js] Brush tool overlay initialized");
 }
 
