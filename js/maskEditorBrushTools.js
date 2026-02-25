@@ -346,10 +346,19 @@ function stampClone(drawX, drawY, radius) {
             const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
             const i = (py * w + px) * 4;
 
-            dstData.data[i]   = srcData.data[i]   * weight + dstData.data[i]   * (1 - weight);
-            dstData.data[i+1] = srcData.data[i+1] * weight + dstData.data[i+1] * (1 - weight);
-            dstData.data[i+2] = srcData.data[i+2] * weight + dstData.data[i+2] * (1 - weight);
-            dstData.data[i+3] = Math.max(dstData.data[i+3], Math.round(srcData.data[i+3] * weight));
+            // The Gaussian weight is applied to alpha only, not to RGB.
+            // Attenuating RGB would cause Screen = src_R × weight² + base_R × (1-weight)
+            // when composited over the base canvas, producing a black halo ring.
+            // With full source RGB and alpha = 255 × weight, compositing is linear:
+            //   Screen = src_R × weight + base_R × (1-weight). No halo.
+            //const srcA = Math.round(srcData.data[i+3] * weight);
+            const srcA = srcData.data[i+3] * weight + dstData.data[i+3] * (1 - weight);
+            // if (srcA > dstData.data[i+3]) { // alpha 只会增大，永远不会侵蚀已有的覆盖率
+                dstData.data[i]   = srcData.data[i];
+                dstData.data[i+1] = srcData.data[i+1];
+                dstData.data[i+2] = srcData.data[i+2];
+                dstData.data[i+3] = srcA;
+            // }
         }
     }
 
