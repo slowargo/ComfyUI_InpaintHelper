@@ -1,4 +1,11 @@
 import { getMaskEditorStore } from "./utils.js";
+import {
+    transformToolState,
+    cleanupTransform,
+    isTransformActive,
+    handleTransformKeydown,
+    initTransformToolEvents
+} from "./maskEditorBrushToolsTransform.js";
 
 // === Editor State ===
 const editorState = {
@@ -139,6 +146,11 @@ function deactivateAllCustomTools() {
         editorState.smudgeBrush.active = false;
         updateSmudgeStyle();
     }
+    // Deactivate Transform tool
+    if (isTransformActive()) {
+        cleanupTransform();
+        updateTransformStyle();
+    }
     if (brushToolOverlay) {
         const ctx = brushToolOverlay.getContext('2d');
         ctx?.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
@@ -150,7 +162,7 @@ function deactivateAllCustomTools() {
  * @returns {boolean} true if at least one custom tool is active
  */
 function isAnyCustomToolActive() {
-    return editorState.cloneBrush.active || editorState.smudgeBrush.active;
+    return editorState.cloneBrush.active || editorState.smudgeBrush.active || isTransformActive();
 }
 
 // === Clone Brush Functions ===
@@ -258,6 +270,16 @@ function onCloneMouseUp(e) {
     if (!editorState.cloneBrush.active || !editorState.cloneBrush.isDrawing) return;
     e.stopImmediatePropagation();
     editorState.cloneBrush.isDrawing = false;
+
+    // When CapsLock is on or Shift is held, sample point moves with the mouse (preserving relative offset)
+    // if (e.getModifierState('CapsLock') || e.shiftKey) {
+    //     const {cx, cy} = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    //     const trackedX = editorState.cloneBrush.sampleX + (cx - editorState.cloneBrush.strokeStartX);
+    //     const trackedY = editorState.cloneBrush.sampleY + (cy - editorState.cloneBrush.strokeStartY);
+    //
+    //     editorState.cloneBrush.sampleX = trackedX;
+    //     editorState.cloneBrush.sampleY = trackedY;
+    // }
 
     const store = getMaskEditorStore();
     store?.canvasHistory?.saveState?.();
@@ -807,6 +829,57 @@ function createSmudgeButton() {
     return smudgeBtn;
 }
 
+// Module-level button reference for Transform tool
+let transformBtnRef = null;
+
+/**
+ * Sync the transform tool button's CSS classes to reflect the current active state.
+ */
+function updateTransformStyle() {
+    if (!transformBtnRef) return;
+    transformBtnRef.classList.toggle('enabled', isTransformActive());
+    transformBtnRef.classList.toggle('disabled', !isTransformActive());
+}
+
+/**
+ * Create the Transform tool toggle button.
+ * Clicking the button toggles the Transform tool on/off, deactivating any other active tool.
+ * @returns {HTMLButtonElement} The transform button element
+ */
+function createTransformButton() {
+    const transformBtn = document.createElement("button");
+    transformBtn.className = "fast-forward-mode-toggle";
+    transformBtn.id = "transform-tool-button";
+    transformBtn.title = "Transform Tool (Q): Select and transform paint layer content";
+
+    const transformIcon = document.createElement("i");
+    transformIcon.className = "pi pi-arrows-alt";
+    transformBtn.appendChild(transformIcon);
+
+    const transformText = document.createElement("span");
+    transformText.textContent = "Transform";
+    transformBtn.appendChild(transformText);
+
+    // Store reference for style updates
+    transformBtnRef = transformBtn;
+
+    transformBtn.addEventListener("click", () => {
+        const willActivate = !isTransformActive();
+        deactivateAllCustomTools();
+        if (willActivate) {
+            // 直接激活Transform工具，不使用toggleTransform
+            initTransformToolEvents();
+            updateTransformStyle();
+        }
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
+        }
+        // console.log("[slowargo.js] Transform Tool:", isTransformActive() ? "enabled" : "disabled");
+    });
+
+    return transformBtn;
+}
+
 // === Keyboard Event Handler ===
 
 /**
@@ -855,6 +928,22 @@ function handleBrushToolKeydown(e) {
         return true;
     }
 
+    // 'Q' key to toggle Transform tool (works even when no tool is active)
+    if (e.key === 'q' || e.key === 'Q') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        const willActivate = !isTransformActive();
+        deactivateAllCustomTools();
+        if (willActivate) {
+            initTransformToolEvents();
+            updateTransformStyle();
+        }
+        if (brushToolOverlay) {
+            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
+        }
+        return true;
+    }
+
     // Early return if no custom tool is active (below shortcuts require active tool)
     if (!isAnyCustomToolActive()) return false;
 
@@ -896,6 +985,7 @@ function handleBrushToolKeyup(e) {
  * Cleanup all brush tool resources including:
  * - Clone tool events and state
  * - Smudge tool events and state
+ * - Transform tool events and state
  * - brushToolOverlay element
  * - Canvas references
  */
@@ -903,6 +993,7 @@ function cleanupAllBrushTools() {
     // Cleanup individual tools
     cleanupCloneTool();
     cleanupSmudgeTool();
+    cleanupTransform();
 
     // Remove overlay element
     if (brushToolOverlay) {
@@ -926,6 +1017,9 @@ export {
     baseCanvas,
     paintCanvas,
 
+    // Coordinate mapping
+    displayToCanvas,
+
     // Brush radius
     getBrushRadius,
 
@@ -939,14 +1033,17 @@ export {
     // Style updates
     updateCloneStyle,
     updateSmudgeStyle,
+    updateTransformStyle,
 
     // Button refs (for external assignment)
     cloneBtnRef,
     smudgeBtnRef,
+    transformBtnRef,
 
     // Button creation
     createCloneButton,
     createSmudgeButton,
+    createTransformButton,
 
     // Keyboard handlers
     handleBrushToolKeydown,
@@ -961,6 +1058,11 @@ export {
     initSmudgeToolEvents,
     renderSmudgeOverlay,
     cleanupSmudgeTool,
+
+    // Transform Tool
+    cleanupTransform,
+    isTransformActive,
+    handleTransformKeydown,
 
     // Cleanup all
     cleanupAllBrushTools,

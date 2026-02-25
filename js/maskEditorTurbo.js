@@ -6,8 +6,10 @@ import {
     initBrushToolOverlay,
     updateCloneStyle,
     updateSmudgeStyle,
+    updateTransformStyle,
     createCloneButton,
     createSmudgeButton,
+    createTransformButton,
     handleBrushToolKeydown,
     handleBrushToolKeyup,
     initCloneToolEvents,
@@ -488,13 +490,15 @@ function addFastForwardToggleButton() {
         }
     });
 
-    // Create Clone Brush and Smudge Brush buttons
+    // Create Clone Brush, Smudge Brush, and Transform Tool buttons
     const cloneBtn = createCloneButton();
     const smudgeBtn = createSmudgeButton();
+    const transformBtn = createTransformButton();
 
     buttonContainer.appendChild(toggleBtn);
     buttonContainer.appendChild(cloneBtn);
     buttonContainer.appendChild(smudgeBtn);
+    buttonContainer.appendChild(transformBtn);
     buttonContainer.appendChild(reloadMaskOnlyBtn);
     buttonContainer.appendChild(reloadAllBtn);
     buttonContainer.appendChild(blurBtn);
