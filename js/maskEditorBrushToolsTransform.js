@@ -1042,15 +1042,15 @@ function restorePreviousSelection() {
         transformToolState.stage = 'transforming';
 
         // 将旧选区像素还原到 paint 层（因为创建选区时清除了）
-        const paintCanvas = getSharedPaintCanvas();
-        if (paintCanvas && transformToolState.selection.sourceCanvas) {
-            const paintCtx = paintCanvas.getContext('2d');
-            paintCtx.drawImage(
-                transformToolState.selection.sourceCanvas,
-                transformToolState.selection.rect.x,
-                transformToolState.selection.rect.y
-            );
-        }
+        // const paintCanvas = getSharedPaintCanvas();
+        // if (paintCanvas && transformToolState.selection.sourceCanvas) {
+        //     const paintCtx = paintCanvas.getContext('2d');
+        //     paintCtx.drawImage(
+        //         transformToolState.selection.sourceCanvas,
+        //         transformToolState.selection.rect.x,
+        //         transformToolState.selection.rect.y
+        //     );
+        // }
 
         // 重绘
         renderTransforming();
@@ -1166,7 +1166,7 @@ function endDrag() {
         if (selection && !selection.stateSaved) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
             selection.stateSaved = true;
-            // console.log('Saved state endDrag');
+            console.log('Saved state endDrag');
         }
     }
 }
@@ -1351,7 +1351,7 @@ function clearSelection(restorePixels = true) {
 
     if (selection) {
         if (restorePixels && !selection.hasTransformed) {
-            // 用户框选后未做任何变换就放弃——还原像素到 paint 层原位
+            // 框选后，paint 层原来的内容已经被剪切掉了。如果用户框选后未做任何变换就放弃，还原像素到 paint 层原位
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
                 const paintCtx = paintCanvas.getContext('2d');
@@ -1363,7 +1363,7 @@ function clearSelection(restorePixels = true) {
         if (selection.hasTransformed && !selection.stateSaved) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
             selection.stateSaved = true;
-            // console.log('Saved state clearSelection');
+            console.log('Saved state clearSelection');
         }
     }
 
