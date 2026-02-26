@@ -878,6 +878,12 @@ function createTransformButton() {
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeydown(e) {
+    // Ignore tool hotkeys when system modifiers are pressed (e.g. Ctrl+C / Alt+S / Cmd+Q).
+    const hasSystemModifier = e.ctrlKey || e.altKey || e.metaKey;
+    if (hasSystemModifier) {
+        return false;
+    }
+
     // Track space key for allowing mask editor pan (always track, even if no tool active)
     if (e.key === ' ') {
         isSpacePressed = true;
