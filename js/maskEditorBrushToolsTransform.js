@@ -49,6 +49,254 @@ function screenToCanvasLength(screenLength) {
     return screenLength * (scale.x + scale.y) / 2;
 }
 
+// === Custom Cursor Element ===
+let customCursorEl = null;
+
+/**
+ * 创建自定义光标元素
+ */
+function createCustomCursor() {
+    if (customCursorEl) return;
+    customCursorEl = document.createElement('div');
+    customCursorEl.id = 'transform-tool-cursor';
+    customCursorEl.style.cssText = `
+        position: fixed;
+        pointer-events: none;
+        z-index: 99999;
+        width: 32px;
+        height: 32px;
+        margin-left: -16px;
+        margin-top: -16px;
+        display: none;
+    `;
+    document.body.appendChild(customCursorEl);
+}
+
+/**
+ * SVG cursor icons
+ */
+const cursorIcons = {
+    // Crosshair with precision dot - for selection mode
+    crosshair: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Outer circle -->
+            <circle cx="16" cy="16" r="10" fill="none" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Cross lines -->
+            <line x1="16" y1="4" x2="16" y2="12" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <line x1="16" y1="20" x2="16" y2="28" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <line x1="4" y1="16" x2="12" y2="16" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <line x1="20" y1="16" x2="28" y2="16" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Center dot -->
+            <circle cx="16" cy="16" r="1.5" fill="#4a9eff" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // Move - four-way arrows
+    move: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Up arrow -->
+            <polygon points="16,4 12,10 14,10 14,12 18,12 18,10 20,10" fill="#4a9eff" filter="url(#shadow)"/>
+            <!-- Down arrow -->
+            <polygon points="16,28 12,22 14,22 14,20 18,20 18,22 20,22" fill="#4a9eff" filter="url(#shadow)"/>
+            <!-- Left arrow -->
+            <polygon points="4,16 10,12 10,14 12,14 12,18 10,18 10,20" fill="#4a9eff" filter="url(#shadow)"/>
+            <!-- Right arrow -->
+            <polygon points="28,16 22,12 22,14 20,14 20,18 22,18 22,20" fill="#4a9eff" filter="url(#shadow)"/>
+            <!-- Center dot -->
+            <circle cx="16" cy="16" r="2" fill="#4a9eff" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // NW-SE resize (top-left to bottom-right)
+    nwseResize: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Background circle -->
+            <circle cx="16" cy="16" r="12" fill="rgba(255, 180, 60, 0.2)" stroke="#ffb43c" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Diagonal arrow (top-left to bottom-right) -->
+            <line x1="8" y1="8" x2="24" y2="24" stroke="#ffb43c" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <polygon points="6,14 6,6 14,6" fill="#ffb43c" filter="url(#shadow)"/>
+            <polygon points="26,18 26,26 18,26" fill="#ffb43c" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // NE-SW resize (top-right to bottom-left)
+    neswResize: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Background circle -->
+            <circle cx="16" cy="16" r="12" fill="rgba(255, 180, 60, 0.2)" stroke="#ffb43c" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Diagonal arrow (top-right to bottom-left) -->
+            <line x1="24" y1="8" x2="8" y2="24" stroke="#ffb43c" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <polygon points="26,14 26,6 18,6" fill="#ffb43c" filter="url(#shadow)"/>
+            <polygon points="6,18 6,26 14,26" fill="#ffb43c" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // NS resize (vertical)
+    nsResize: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Background circle -->
+            <circle cx="16" cy="16" r="12" fill="rgba(100, 220, 120, 0.2)" stroke="#64dc78" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Vertical arrows -->
+            <line x1="16" y1="6" x2="16" y2="26" stroke="#64dc78" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <polygon points="16,4 11,10 21,10" fill="#64dc78" filter="url(#shadow)"/>
+            <polygon points="16,28 11,22 21,22" fill="#64dc78" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // EW resize (horizontal)
+    ewResize: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Background circle -->
+            <circle cx="16" cy="16" r="12" fill="rgba(100, 220, 120, 0.2)" stroke="#64dc78" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Horizontal arrows -->
+            <line x1="6" y1="16" x2="26" y2="16" stroke="#64dc78" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <polygon points="4,16 10,11 10,21" fill="#64dc78" filter="url(#shadow)"/>
+            <polygon points="28,16 22,11 22,21" fill="#64dc78" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // Rotate (grab)
+    rotate: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Background circle -->
+            <circle cx="16" cy="16" r="12" fill="rgba(255, 100, 180, 0.2)" stroke="#ff64b4" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- Rotation arrow arc -->
+            <path d="M 10,16 A 6,6 0 1,1 22,16" fill="none" stroke="#ff64b4" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <!-- Arrow head -->
+            <polygon points="22,12 26,18 18,18" fill="#ff64b4" filter="url(#shadow)"/>
+            <!-- Center dot -->
+            <circle cx="16" cy="16" r="2" fill="#ff64b4" filter="url(#shadow)"/>
+        </svg>
+    `,
+
+    // Rotating (grabbing) - filled version
+    rotating: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <!-- Filled background circle -->
+            <circle cx="16" cy="16" r="12" fill="#ff64b4" stroke="#ff64b4" stroke-width="1.5" filter="url(#shadow)"/>
+            <!-- White arc -->
+            <path d="M 10,16 A 6,6 0 1,1 22,16" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            <!-- White arrow head -->
+            <polygon points="22,12 26,18 18,18" fill="white"/>
+            <!-- Center dot -->
+            <circle cx="16" cy="16" r="2" fill="white"/>
+        </svg>
+    `,
+
+    // Default - simple pointer dot
+    default: `
+        <svg width="32" height="32" viewBox="0 0 32 32">
+            <defs>
+                <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="black" flood-opacity="0.8"/>
+                </filter>
+            </defs>
+            <circle cx="16" cy="16" r="4" fill="#4a9eff" filter="url(#shadow)"/>
+        </svg>
+    `
+};
+
+/**
+ * 销毁自定义光标元素
+ */
+function destroyCustomCursor() {
+    if (customCursorEl) {
+        customCursorEl.remove();
+        customCursorEl = null;
+    }
+}
+
+/**
+ * 更新自定义光标位置和样式
+ */
+function updateCustomCursor(clientX, clientY, cursorType) {
+    if (!customCursorEl) return;
+
+    customCursorEl.style.left = clientX + 'px';
+    customCursorEl.style.top = clientY + 'px';
+
+    // 根据 cursorType 更新光标 SVG
+    let svg = cursorIcons.default;
+    switch (cursorType) {
+        case 'crosshair':
+            svg = cursorIcons.crosshair;
+            break;
+        case 'move':
+            svg = cursorIcons.move;
+            break;
+        case 'nwse-resize':
+            svg = cursorIcons.nwseResize;
+            break;
+        case 'nesw-resize':
+            svg = cursorIcons.neswResize;
+            break;
+        case 'ns-resize':
+            svg = cursorIcons.nsResize;
+            break;
+        case 'ew-resize':
+            svg = cursorIcons.ewResize;
+            break;
+        case 'grab':
+            svg = cursorIcons.rotate;
+            break;
+        case 'grabbing':
+            svg = cursorIcons.rotating;
+            break;
+        default:
+            svg = cursorIcons.default;
+    }
+    customCursorEl.innerHTML = svg;
+}
+
+/**
+ * 显示/隐藏自定义光标
+ */
+function showCustomCursor(show) {
+    if (customCursorEl) {
+        customCursorEl.style.display = show ? 'block' : 'none';
+    }
+}
+
 // === Transform Tool State ===
 const transformToolState = {
     // 当前阶段
@@ -455,15 +703,12 @@ function getCursorForHandle(handle) {
 }
 
 /**
- * 更新光标状态
+ * 获取当前光标类型（用于自定义光标）
+ * @returns {string} cursor type
  */
-function updateCursor(pos) {
-    const overlay = sharedOverlay;
-    if (!overlay) return;
-
+function getCurrentCursorType(pos) {
     if (transformToolState.stage === 'selecting') {
-        overlay.style.cursor = 'crosshair';
-        return;
+        return 'crosshair';
     }
 
     if (transformToolState.stage === 'transforming') {
@@ -471,47 +716,82 @@ function updateCursor(pos) {
         if (transformToolState.drag.active) {
             const drag = transformToolState.drag;
             if (drag.type === 'rotate') {
-                overlay.style.cursor = 'grabbing';
+                return 'grabbing';
             } else if (drag.type === 'move') {
-                overlay.style.cursor = 'move';
+                return 'move';
             } else if (drag.type === 'corner') {
                 const cornerCursors = ['nwse-resize', 'nesw-resize', 'nwse-resize', 'nesw-resize'];
-                overlay.style.cursor = cornerCursors[drag.targetIndex] || 'nwse-resize';
+                return cornerCursors[drag.targetIndex] || 'nwse-resize';
             } else if (drag.type === 'edge') {
                 const edgeCursors = ['ns-resize', 'ew-resize', 'ns-resize', 'ew-resize'];
-                overlay.style.cursor = edgeCursors[drag.targetIndex] || 'move';
+                return edgeCursors[drag.targetIndex] || 'move';
             }
-            return;
         }
 
         // 检测句柄
         const handle = detectHandle(pos, transformToolState.transform);
         if (handle) {
-            overlay.style.cursor = getCursorForHandle(handle);
-            return;
+            return getCursorForHandle(handle);
         }
 
         // 检测是否在选区内部
         if (isPointInQuad(pos, transformToolState.transform.corners)) {
-            overlay.style.cursor = 'move';
-            return;
+            return 'move';
         }
 
-        overlay.style.cursor = 'default';
+        return 'default';
+    }
+
+    return 'default';
+}
+
+/**
+ * 更新光标状态
+ */
+function updateCursor(pos) {
+    const cursorType = getCurrentCursorType(pos);
+    // 使用自定义光标元素而不是 overlay.style.cursor
+    // 因为 ComfyUI 的工具系统会覆盖 overlay 的 cursor 样式
+}
+
+/**
+ * 更新自定义光标（在 pointermove 中调用）
+ */
+function updateCustomCursorAt(clientX, clientY) {
+    const overlay = sharedOverlay;
+    if (!overlay) return;
+
+    // 检查是否在画布区域内
+    const rect = overlay.getBoundingClientRect();
+    const isOverCanvas = clientX >= rect.left && clientX <= rect.right &&
+                         clientY >= rect.top && clientY <= rect.bottom;
+
+    if (!isOverCanvas) {
+        showCustomCursor(false);
         return;
     }
 
-    overlay.style.cursor = 'default';
+    const pos = displayToCanvas(overlay, clientX, clientY);
+    const cursorType = getCurrentCursorType(pos);
+
+    // Transform 工具激活时总是显示光标
+    // idle 状态显示 crosshair（准备框选），其他状态根据操作显示对应光标
+    if (transformToolState.stage === 'idle') {
+        updateCustomCursor(clientX, clientY, 'crosshair');
+        showCustomCursor(true);
+    } else if (cursorType !== 'default') {
+        updateCustomCursor(clientX, clientY, cursorType);
+        showCustomCursor(true);
+    } else {
+        showCustomCursor(false);
+    }
 }
 
 /**
  * 重置光标为默认
  */
 function resetCursor() {
-    const overlay = sharedOverlay;
-    if (overlay) {
-        overlay.style.cursor = '';
-    }
+    showCustomCursor(false);
 }
 
 // === Event Handlers ===
@@ -525,6 +805,10 @@ function initTransformToolEvents() {
     document.addEventListener('pointermove', onTransformPointerMove, true);
     document.addEventListener('pointerup', onTransformPointerUp, true);
     transformToolState.eventsBound = true;
+    // 创建自定义光标元素并设置初始样式
+    createCustomCursor();
+    // 立即设置初始光标为 crosshair（框选模式）
+    updateCustomCursor(0, 0, 'crosshair');
     console.log("[Transform Tool] Events bound to document (capture)");
 }
 
@@ -592,15 +876,16 @@ function onTransformPointerMove(e) {
     const pos = displayToCanvas(overlay, e.clientX, e.clientY);
     transformToolState.lastMousePos = pos;
 
+    // 更新自定义光标
+    updateCustomCursorAt(e.clientX, e.clientY);
+
     if (transformToolState.stage === 'selecting') {
         updateSelection(pos);
-        updateCursor(pos);
     } else if (transformToolState.stage === 'transforming') {
         if (transformToolState.drag.active) {
             updateDrag(pos);
         }
         renderTransforming();
-        updateCursor(pos);
     }
 }
 
@@ -1145,6 +1430,9 @@ function cleanupTransform() {
         document.removeEventListener('pointerup', onTransformPointerUp, true);
         transformToolState.eventsBound = false;
     }
+
+    // 销毁自定义光标
+    destroyCustomCursor();
 
     // 重置光标
     resetCursor();
