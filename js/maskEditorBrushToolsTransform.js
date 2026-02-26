@@ -496,18 +496,6 @@ function clearPaintRect(rect) {
 }
 
 /**
- * 从 base 层复制到 paint 层
- */
-function copyToPaintLayer(rect, imageData) {
-    const paintCanvas = getSharedPaintCanvas();
-    if (!paintCanvas) return;
-    const ctx = paintCanvas.getContext('2d');
-    ctx.putImageData(imageData, rect.x, rect.y);
-    getMaskEditorStore()?.canvasHistory?.saveState?.();
-    // console.log('Saved state copyToPaintLayer');
-}
-
-/**
  * 采样 paint 层
  */
 function samplePaintLayer(rect) {
@@ -970,6 +958,7 @@ function finalizeSelection() {
     const isEmpty = isImageDataEmpty(paintData, minPixels);
 
     let sourceData = paintData;
+    // paint 层为空时，使用 base 层内容作为变换源
     if (isEmpty) {
         // 从 base 层检测选区内容
         const baseData = sampleBaseLayer(rect);
@@ -980,14 +969,7 @@ function finalizeSelection() {
             restorePreviousSelection();
             return;
         }
-
-        // 从 base 层复制到 paint 层
-        copyToPaintLayer(rect, baseData);
         sourceData = baseData;
-
-        showToast('Empty selection, auto-copied from base layer (Ctrl+Z to undo the copy)', {
-            duration: 3000
-        });
     }
 
     transformToolState.selection = {
