@@ -330,7 +330,7 @@ function stampClone(drawX, drawY, radius) {
 
     const srcL = Math.max(0, Math.round(srcX - r));
     const srcT = Math.max(0, Math.round(srcY - r));
-    const srcR = Math.min(baseCanvas.width,  Math.round(srcX + r));
+    const srcR = Math.min(baseCanvas.width, Math.round(srcX + r));
     const srcB = Math.min(baseCanvas.height, Math.round(srcY + r));
     if (srcL >= srcR || srcT >= srcB) return;
 
@@ -340,7 +340,7 @@ function stampClone(drawX, drawY, radius) {
     const dstL = Math.round(drawX - (srcX - srcL));
     const dstT = Math.round(drawY - (srcY - srcT));
 
-    const baseCtx  = baseCanvas.getContext('2d',  { willReadFrequently: true });
+    const baseCtx = baseCanvas.getContext('2d', { willReadFrequently: true });
     const paintCtx = paintCanvas.getContext('2d', { willReadFrequently: true });
 
     const srcData = baseCtx.getImageData(srcL, srcT, w, h);
@@ -348,27 +348,38 @@ function stampClone(drawX, drawY, radius) {
 
     for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
-            const dx   = (srcL + px) - srcX;
-            const dy   = (srcT + py) - srcY;
+            const dx = (srcL + px) - srcX;
+            const dy = (srcT + py) - srcY;
             const dist = Math.sqrt(dx * dx + dy * dy);
             if (dist > radius) continue;
 
+            // Gaussian weight as brush falloff
             const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
             const i = (py * w + px) * 4;
 
-            // The Gaussian weight is applied to alpha only, not to RGB.
-            // Attenuating RGB would cause Screen = src_R × weight² + base_R × (1-weight)
-            // when composited over the base canvas, producing a black halo ring.
-            // With full source RGB and alpha = 255 × weight, compositing is linear:
-            //   Screen = src_R × weight + base_R × (1-weight). No halo.
-            //const srcA = Math.round(srcData.data[i+3] * weight);
-            const srcA = srcData.data[i+3] * weight + dstData.data[i+3] * (1 - weight);
-            // if (srcA > dstData.data[i+3]) { // alpha 只会增大，永远不会侵蚀已有的覆盖率
-                dstData.data[i]   = srcData.data[i];
-                dstData.data[i+1] = srcData.data[i+1];
-                dstData.data[i+2] = srcData.data[i+2];
-                dstData.data[i+3] = srcA;
-            // }
+            // Source pixel (normalized to 0-1)
+            const sR = srcData.data[i];
+            const sG = srcData.data[i + 1];
+            const sB = srcData.data[i + 2];
+            const sA = srcData.data[i + 3] / 255 * weight; // Apply brush falloff
+
+            // Destination pixel
+            const dR = dstData.data[i];
+            const dG = dstData.data[i + 1];
+            const dB = dstData.data[i + 2];
+            const dA = dstData.data[i + 3] / 255;
+
+            // Porter-Duff OVER alpha compositing
+            // outA = srcA + dstA * (1 - srcA)
+            const outA = sA + dA * (1 - sA);
+
+            if (outA > 0) {
+                // outRGB = (srcRGB * srcA + dstRGB * dstA * (1 - srcA)) / outA
+                dstData.data[i]     = Math.round((sR * sA + dR * dA * (1 - sA)) / outA);
+                dstData.data[i + 1] = Math.round((sG * sA + dG * dA * (1 - sA)) / outA);
+                dstData.data[i + 2] = Math.round((sB * sA + dB * dA * (1 - sA)) / outA);
+                dstData.data[i + 3] = Math.round(outA * 255);
+            }
         }
     }
 
