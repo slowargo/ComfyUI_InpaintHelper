@@ -328,7 +328,15 @@ const transformToolState = {
 
     // 保存的旧选区状态（用于新选区无效时恢复）
     previousSelection: null,
-    previousTransform: null
+    previousTransform: null,
+
+    // 准实时预览控制
+    preview: {
+        throttleMs: 200,      // 刷新间隔（毫秒）
+        lastRenderTime: 0,    // 上次渲染时间
+        pendingRender: false, // 是否有待渲染请求
+        timerId: null         // setTimeout ID
+    }
 };
 
 // === Math Utilities ===
@@ -1163,6 +1171,58 @@ function updateDrag(pos) {
             transformToolState.transform.corners[i].y = center.y + relX * sin + relY * cos;
         }
     }
+
+    // 请求节流渲染（准实时预览）
+    requestThrottledRender();
+}
+
+/**
+ * 请求节流的实时预览渲染
+ * 限制刷新频率为每 200ms 一次，避免性能问题
+ */
+function requestThrottledRender() {
+    const preview = transformToolState.preview;
+    const now = performance.now();
+    const elapsed = now - preview.lastRenderTime;
+
+    // 如果距离上次渲染已超过节流间隔，立即渲染
+    if (elapsed >= preview.throttleMs) {
+        if (preview.timerId) {
+            clearTimeout(preview.timerId);
+            preview.timerId = null;
+        }
+        preview.pendingRender = false;
+        preview.lastRenderTime = now;
+        renderTransforming();
+        return;
+    }
+
+    // 否则，如果已有待渲染请求，不重复设置
+    if (preview.pendingRender) {
+        return;
+    }
+
+    // 设置定时器在剩余时间后渲染
+    preview.pendingRender = true;
+    const remaining = preview.throttleMs - elapsed;
+    preview.timerId = setTimeout(() => {
+        preview.pendingRender = false;
+        preview.timerId = null;
+        preview.lastRenderTime = performance.now();
+        renderTransforming();
+    }, remaining);
+}
+
+/**
+ * 取消待执行的预览渲染
+ */
+function cancelPendingRender() {
+    const preview = transformToolState.preview;
+    if (preview.timerId) {
+        clearTimeout(preview.timerId);
+        preview.timerId = null;
+    }
+    preview.pendingRender = false;
 }
 
 /**
@@ -1171,6 +1231,9 @@ function updateDrag(pos) {
 function endDrag() {
     const { drag, transform } = transformToolState;
     if (!drag.active) return;
+
+    // 取消待执行的预览渲染，确保立即渲染最终状态
+    cancelPendingRender();
 
     const didGeometryChange = hasCornersChanged(
         drag.startTransform?.corners,
@@ -1257,14 +1320,8 @@ function renderTransforming() {
 
     const corners = transformToolState.transform.corners;
 
-    // 绘制变换后的图像轮廓
-    if (!transformToolState.drag.active || transformToolState.drag.type === 'move') {
-        // 移动操作可以实时渲染
-        drawTransformedImage(ctx, corners);
-    } else {
-        // 其他操作只绘制轮廓
-        drawTransformOutline(ctx, corners);
-    }
+    // 绘制变换后的图像（准实时预览，所有操作类型都支持）
+    drawTransformedImage(ctx, corners);
 
     // 绘制句柄
     drawHandles(ctx, corners);
@@ -1409,6 +1466,9 @@ function clearSelection(restorePixels = true) {
  * 清理 Transform 工具
  */
 function cleanupTransform() {
+    // 取消待执行的预览渲染
+    cancelPendingRender();
+
     // 清除选区（保留已应用的变换）
     clearSelection();
 
@@ -1435,6 +1495,10 @@ function cleanupTransform() {
     // 完全退出工具时清除所有状态
     transformToolState.previousSelection = null;
     transformToolState.previousTransform = null;
+
+    // 重置预览状态
+    transformToolState.preview.lastRenderTime = 0;
+    transformToolState.preview.pendingRender = false;
 }
 
 /**
