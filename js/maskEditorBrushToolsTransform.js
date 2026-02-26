@@ -457,6 +457,20 @@ function getBounds(corners) {
 }
 
 /**
+ * 判断两组角点是否有可感知变化
+ */
+function hasCornersChanged(beforeCorners, afterCorners, epsilon = 1e-3) {
+    if (!beforeCorners || !afterCorners || beforeCorners.length !== afterCorners.length) return false;
+    for (let i = 0; i < beforeCorners.length; i++) {
+        if (Math.abs(beforeCorners[i].x - afterCorners[i].x) > epsilon ||
+            Math.abs(beforeCorners[i].y - afterCorners[i].y) > epsilon) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * 检测图像数据是否为空
  */
 function isImageDataEmpty(imageData, minOpaquePixels) {
@@ -977,8 +991,7 @@ function finalizeSelection() {
         sourceCanvas: createSourceCanvas(sourceData),
         lastAppliedBounds: null,
         paintSnapshot: null,
-        hasTransformed: false,
-        stateSaved: false
+        hasTransformed: false
     };
 
     // 剪切：从 paint 层清除选区像素
@@ -1156,19 +1169,19 @@ function updateDrag(pos) {
  * 结束拖动
  */
 function endDrag() {
-    if (transformToolState.drag.active) {
-        applyTransform();
-        transformToolState.drag.active = false;
-        renderTransforming();
+    const { drag, transform } = transformToolState;
+    if (!drag.active) return;
 
-        // 保存历史（仅在未保存过时）
-        const { selection } = transformToolState;
-        if (selection && !selection.stateSaved) {
-            getMaskEditorStore()?.canvasHistory?.saveState?.();
-            selection.stateSaved = true;
-            console.log('Saved state endDrag');
-        }
+    const didGeometryChange = hasCornersChanged(
+        drag.startTransform?.corners,
+        transform?.corners
+    );
+    if (didGeometryChange) {
+        applyTransform();
     }
+
+    transformToolState.drag.active = false;
+    renderTransforming();
 }
 
 /**
@@ -1359,10 +1372,10 @@ function clearSelection(restorePixels = true) {
                     selection.rect.x, selection.rect.y);
             }
         }
-        // 保存历史（仅在确实发生过变换且未保存过时才有意义）
-        if (selection.hasTransformed && !selection.stateSaved) {
+
+        // 历史保存策略：仅在 clearSelection 时保存一次
+        if (selection.hasTransformed) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
-            selection.stateSaved = true;
             console.log('Saved state clearSelection');
         }
     }
