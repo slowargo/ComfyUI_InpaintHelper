@@ -3,7 +3,6 @@ import {
     transformToolState,
     cleanupTransform,
     isTransformActive,
-    handleTransformKeydown,
     initTransformToolEvents,
     setSharedOverlay
 } from "./maskEditorBrushToolsTransform.js";
@@ -1042,7 +1041,6 @@ export {
     // Transform Tool
     cleanupTransform,
     isTransformActive,
-    handleTransformKeydown,
 
     // Cleanup all
     cleanupAllBrushTools,

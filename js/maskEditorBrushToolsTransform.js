@@ -1455,22 +1455,6 @@ function isTransformActive() {
     return transformToolState.eventsBound;
 }
 
-/**
- * 处理 Transform 工具按键
- */
-function handleTransformKeydown(e) {
-    if (!isTransformActive()) return false;
-
-    // Escape 退出工具
-    if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        cleanupTransform();
-        return true;
-    }
-
-    return false;
-}
 
 // === Exports ===
 
@@ -1482,7 +1466,6 @@ export {
     initTransformToolEvents,
     cleanupTransform,
     isTransformActive,
-    handleTransformKeydown,
     setSharedOverlay,
 
     // 渲染
