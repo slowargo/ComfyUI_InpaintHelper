@@ -47,6 +47,30 @@ function displayToCanvas(canvas, clientX, clientY) {
     };
 }
 
+/**
+ * 获取 canvas 缩放比例（canvas 像素尺寸 / CSS 显示尺寸）
+ */
+function getCanvasScale(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: canvas.width / rect.width,
+        y: canvas.height / rect.height
+    };
+}
+
+/**
+ * 将屏幕长度转换为 canvas 坐标长度
+ * @param {number} screenLength - 屏幕上的长度（像素）
+ * @returns {number} canvas 坐标系中的长度
+ */
+function screenToCanvasLength(screenLength) {
+    const overlay = sharedOverlay;
+    if (!overlay) return screenLength;
+    const scale = getCanvasScale(overlay);
+    // 使用平均缩放比例，保持圆形不变形
+    return screenLength * (scale.x + scale.y) / 2;
+}
+
 // === Transform Tool State ===
 const transformToolState = {
     // 当前阶段
@@ -132,33 +156,36 @@ function pointToSegmentDistance(point, a, b) {
 function detectHandle(pos, transform) {
     const corners = transform.corners;
 
-    // 1. 检测四角（最高优先级）- 15px 阈值
+    // 1. 检测四角（最高优先级）- 15px 阈值（屏幕坐标）
+    const cornerThreshold = screenToCanvasLength(15);
     for (let i = 0; i < 4; i++) {
         const dist = Math.hypot(pos.x - corners[i].x, pos.y - corners[i].y);
-        if (dist <= 15) {
+        if (dist <= cornerThreshold) {
             return { type: 'corner', index: i };
         }
     }
 
-    // 2. 检测旋转手柄 - 10px 阈值
+    // 2. 检测旋转手柄 - 10px 阈值（屏幕坐标）
+    const handleLength = screenToCanvasLength(30);  // 30px 屏幕长度
     const topCenter = {
         x: (corners[0].x + corners[1].x) / 2,
         y: (corners[0].y + corners[1].y) / 2
     };
     const rotateHandle = {
         x: topCenter.x,
-        y: topCenter.y - 30
+        y: topCenter.y - handleLength
     };
     const rotateDist = Math.hypot(pos.x - rotateHandle.x, pos.y - rotateHandle.y);
-    if (rotateDist <= 10) {
+    if (rotateDist <= screenToCanvasLength(10)) {
         return { type: 'rotate', index: -1 };
     }
 
-    // 3. 检测四边 - 10px 阈值
+    // 3. 检测四边 - 10px 阈值（屏幕坐标）
+    const edgeThreshold = screenToCanvasLength(10);
     for (let i = 0; i < 4; i++) {
         const next = (i + 1) % 4;
         const dist = pointToSegmentDistance(pos, corners[i], corners[next]);
-        if (dist <= 10) {
+        if (dist <= edgeThreshold) {
             return { type: 'edge', index: i };
         }
     }
@@ -1028,19 +1055,21 @@ function drawHandles(ctx, corners) {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 1;
 
+    const cornerSize = screenToCanvasLength(4);  // 4px 屏幕半边长 -> 8px 总边长
     for (let i = 0; i < 4; i++) {
-        ctx.fillRect(corners[i].x - 4, corners[i].y - 4, 8, 8);
-        ctx.strokeRect(corners[i].x - 4, corners[i].y - 4, 8, 8);
+        ctx.fillRect(corners[i].x - cornerSize, corners[i].y - cornerSize, cornerSize * 2, cornerSize * 2);
+        ctx.strokeRect(corners[i].x - cornerSize, corners[i].y - cornerSize, cornerSize * 2, cornerSize * 2);
     }
 
     // 绘制旋转手柄
+    const handleLength = screenToCanvasLength(30);  // 30px 屏幕长度
     const topCenter = {
         x: (corners[0].x + corners[1].x) / 2,
         y: (corners[0].y + corners[1].y) / 2
     };
     const rotateHandle = {
         x: topCenter.x,
-        y: topCenter.y - 30
+        y: topCenter.y - handleLength
     };
 
     // 连接线
@@ -1051,8 +1080,9 @@ function drawHandles(ctx, corners) {
     ctx.stroke();
 
     // 旋转手柄圆圈
+    const handleRadius = screenToCanvasLength(6);  // 6px 屏幕半径
     ctx.beginPath();
-    ctx.arc(rotateHandle.x, rotateHandle.y, 6, 0, Math.PI * 2);
+    ctx.arc(rotateHandle.x, rotateHandle.y, handleRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 }
