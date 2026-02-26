@@ -474,6 +474,7 @@ function isImageDataEmpty(imageData, minOpaquePixels) {
 
 /**
  * 创建源图像画布
+ * 把 imageData 转成 canvas, 作为后续变换的唯一源，避免被清空或重复变换污染
  */
 function createSourceCanvas(imageData) {
     const canvas = document.createElement('canvas');
@@ -502,6 +503,8 @@ function copyToPaintLayer(rect, imageData) {
     if (!paintCanvas) return;
     const ctx = paintCanvas.getContext('2d');
     ctx.putImageData(imageData, rect.x, rect.y);
+    getMaskEditorStore()?.canvasHistory?.saveState?.();
+    // console.log('Saved state copyToPaintLayer');
 }
 
 /**
@@ -746,15 +749,6 @@ function getCurrentCursorType(pos) {
 }
 
 /**
- * 更新光标状态
- */
-function updateCursor(pos) {
-    const cursorType = getCurrentCursorType(pos);
-    // 使用自定义光标元素而不是 overlay.style.cursor
-    // 因为 ComfyUI 的工具系统会覆盖 overlay 的 cursor 样式
-}
-
-/**
  * 更新自定义光标（在 pointermove 中调用）
  */
 function updateCustomCursorAt(clientX, clientY) {
@@ -975,11 +969,13 @@ function finalizeSelection() {
     const minPixels = Math.max(16, Math.floor(rect.width * rect.height * 0.005));
     const isEmpty = isImageDataEmpty(paintData, minPixels);
 
+    let sourceData = paintData;
     if (isEmpty) {
         // 从 base 层检测选区内容
         const baseData = sampleBaseLayer(rect);
         const isBaseEmpty = isImageDataEmpty(baseData, minPixels);
         if (isBaseEmpty) {
+            // should not reach here. just in case
             showToast('Both layers are empty in this area', { duration: 2000 });
             restorePreviousSelection();
             return;
@@ -987,29 +983,21 @@ function finalizeSelection() {
 
         // 从 base 层复制到 paint 层
         copyToPaintLayer(rect, baseData);
+        sourceData = baseData;
 
-        transformToolState.selection = {
-            rect: rect,
-            sourceCanvas: createSourceCanvas(baseData),
-            isFromBase: true,
-            lastAppliedBounds: null,
-            paintSnapshot: null,
-            hasTransformed: false
-        };
-
-        showToast('Empty selection, auto-copied from base layer (Ctrl+Z to undo)', {
+        showToast('Empty selection, auto-copied from base layer (Ctrl+Z to undo the copy)', {
             duration: 3000
         });
-    } else {
-        transformToolState.selection = {
-            rect: rect,
-            sourceCanvas: createSourceCanvas(paintData),
-            isFromBase: false,
-            lastAppliedBounds: null,
-            paintSnapshot: null,
-            hasTransformed: false
-        };
     }
+
+    transformToolState.selection = {
+        rect: rect,
+        sourceCanvas: createSourceCanvas(sourceData),
+        lastAppliedBounds: null,
+        paintSnapshot: null,
+        hasTransformed: false,
+        stateSaved: false
+    };
 
     // 剪切：从 paint 层清除选区像素
     clearPaintRect(rect);
@@ -1191,9 +1179,13 @@ function endDrag() {
         transformToolState.drag.active = false;
         renderTransforming();
 
-        // 保存历史
-        const store = getMaskEditorStore();
-        store?.canvasHistory?.saveState?.();
+        // 保存历史（仅在未保存过时）
+        const { selection } = transformToolState;
+        if (selection && !selection.stateSaved) {
+            getMaskEditorStore()?.canvasHistory?.saveState?.();
+            selection.stateSaved = true;
+            // console.log('Saved state endDrag');
+        }
     }
 }
 
@@ -1385,9 +1377,11 @@ function clearSelection(restorePixels = true) {
                     selection.rect.x, selection.rect.y);
             }
         }
-        // 保存历史（仅在确实发生过变换时才有意义）
-        if (selection.hasTransformed) {
+        // 保存历史（仅在确实发生过变换且未保存过时才有意义）
+        if (selection.hasTransformed && !selection.stateSaved) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
+            selection.stateSaved = true;
+            // console.log('Saved state clearSelection');
         }
     }
 
