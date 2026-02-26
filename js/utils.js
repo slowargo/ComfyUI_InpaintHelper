@@ -178,6 +178,89 @@ export function eventMatchesCommand(event, commandId) {
     return false;
 }
 
+// === Canvas Coordinate Utilities ===
+
+/**
+ * Map client (CSS) coordinates to canvas pixel coordinates.
+ * Necessary because the canvas display size may differ from its intrinsic pixel size
+ * (e.g. the canvas is rendered at 50% scale, so CSS pixels must be multiplied by 2).
+ *
+ * 坐标映射函数。需要进行坐标映射是因为 Canvas 的显示尺寸与实际像素尺寸可能不一致（画布可能以缩小/放大状态显示)
+ * 例如缩小到 50%, rect.width 为 canvas.width 的一半，下面公式就相当于 offset * 2，放大回正确的像素位置
+ *
+ * @param {HTMLCanvasElement} canvas - The target canvas element
+ * @param {number} clientX - Client X coordinate from the pointer event
+ * @param {number} clientY - Client Y coordinate from the pointer event
+ * @returns {{x: number, y: number}} Canvas pixel coordinates
+ */
+export function displayToCanvas(canvas, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (clientX - rect.left) * canvas.width  / rect.width,
+        y: (clientY - rect.top)  * canvas.height / rect.height,
+    };
+}
+
+/**
+ * 获取 canvas 缩放比例（canvas 像素尺寸 / CSS 显示尺寸）
+ * @param {HTMLCanvasElement} canvas
+ * @returns {{x: number, y: number}}
+ */
+export function getCanvasScale(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: canvas.width / rect.width,
+        y: canvas.height / rect.height
+    };
+}
+
+/**
+ * 显示 Toast 消息
+ * @param {string} message
+ * @param {{duration?: number}} [options]
+ */
+export function showToast(message, options = {}) {
+    console.log(`[Transform Tool] ${message}`);
+
+    // 尝试使用现有的 toast 系统
+    try {
+        const toastStore = getToastStore();
+        if (toastStore?.add) {
+            toastStore.add({
+                severity: 'info',
+                summary: message,
+                life: options.duration || 3000
+            });
+            return;
+        }
+    } catch (e) {
+        // 忽略错误，继续尝试其他方法
+    }
+
+    // 备用方案：创建简单的 toast 元素
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 12px 16px;
+        border-radius: 4px;
+        z-index: 10000;
+        font-size: 14px;
+        max-width: 300px;
+    `;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+        }
+    }, options.duration || 3000);
+}
+
 // === Mask Canvas Utilities ===
 
 export function isMaskNonEmpty() {

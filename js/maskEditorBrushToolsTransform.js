@@ -1,4 +1,4 @@
-import { getMaskEditorStore } from "./utils.js";
+import { getMaskEditorStore, displayToCanvas, getCanvasScale, showToast } from "./utils.js";
 
 // === Shared Resources Access ===
 let sharedOverlay = null;
@@ -34,28 +34,6 @@ function getSharedPaintCanvas() {
         sharedPaintCanvas = canvases[1];
     }
     return sharedPaintCanvas;
-}
-
-/**
- * 坐标映射函数
- */
-function displayToCanvas(canvas, clientX, clientY) {
-    const rect = canvas.getBoundingClientRect();
-    return {
-        x: (clientX - rect.left) * canvas.width / rect.width,
-        y: (clientY - rect.top) * canvas.height / rect.height,
-    };
-}
-
-/**
- * 获取 canvas 缩放比例（canvas 像素尺寸 / CSS 显示尺寸）
- */
-function getCanvasScale(canvas) {
-    const rect = canvas.getBoundingClientRect();
-    return {
-        x: canvas.width / rect.width,
-        y: canvas.height / rect.height
-    };
 }
 
 /**
@@ -98,7 +76,11 @@ const transformToolState = {
     eventsBound: false,
 
     // 最后的鼠标位置
-    lastMousePos: null
+    lastMousePos: null,
+
+    // 保存的旧选区状态（用于新选区无效时恢复）
+    previousSelection: null,
+    previousTransform: null
 };
 
 // === Math Utilities ===
@@ -292,51 +274,6 @@ function sampleBaseLayer(rect) {
     if (!baseCanvas) return null;
     const ctx = baseCanvas.getContext('2d', { willReadFrequently: true });
     return ctx.getImageData(rect.x, rect.y, rect.width, rect.height);
-}
-
-/**
- * 显示 Toast 消息
- */
-function showToast(message, options = {}) {
-    console.log(`[Transform Tool] ${message}`);
-
-    // 尝试使用现有的 toast 系统
-    try {
-        const toastStore = window.getToastStore?.();
-        if (toastStore?.add) {
-            toastStore.add({
-                message: message,
-                type: 'info',
-                timeout: options.duration || 3000
-            });
-            return;
-        }
-    } catch (e) {
-        // 忽略错误，继续尝试其他方法
-    }
-
-    // 备用方案：创建简单的 toast 元素
-    const toast = document.createElement('div');
-    toast.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 12px 16px;
-        border-radius: 4px;
-        z-index: 10000;
-        font-size: 14px;
-        max-width: 300px;
-    `;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-
-    setTimeout(() => {
-        if (toast.parentNode) {
-            toast.parentNode.removeChild(toast);
-        }
-    }, options.duration || 3000);
 }
 
 /**
@@ -625,13 +562,17 @@ function onTransformPointerDown(e) {
             return;
         }
 
-        // 在选区外：放弃旧选区，开始新框选
-        clearSelection();
+        // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
+        transformToolState.previousSelection = transformToolState.selection;
+        transformToolState.previousTransform = transformToolState.transform;
+        clearSelection(false);  // false: 不还原像素
         transformToolState.stage = 'selecting';
         startSelection(pos);
     } else if (transformToolState.stage === 'selecting') {
-        // 继续框选或开始新框选 (just in case)
-        startSelection(pos);
+        // 如果正在框选中（已按下未松开），继续；否则开始新框选
+        if (!selectionStart) {
+            startSelection(pos);
+        }
     } else if (transformToolState.stage === 'idle') {
         // 从 idle 进入 selecting
         transformToolState.stage = 'selecting';
@@ -702,10 +643,12 @@ function updateSelection(pos) {
 
     const rect = normalizeRect(selectionStart, pos);
 
-    // 绘制虚线选区框
-    ctx.setLineDash([4, 4]);
+    // 绘制虚线选区框（使用屏幕坐标）
+    const lineWidth = screenToCanvasLength(1);
+    const dashSize = screenToCanvasLength(4);
+    ctx.setLineDash([dashSize, dashSize]);
     ctx.strokeStyle = '#4a9eff';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = lineWidth;
     ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
 
     // 半透明填充
@@ -738,7 +681,7 @@ function finalizeSelection() {
 
     // 过滤过小的选区
     if (rect.width < 5 || rect.height < 5) {
-        cancelSelection();
+        restorePreviousSelection();
         return;
     }
 
@@ -753,7 +696,7 @@ function finalizeSelection() {
         const isBaseEmpty = isImageDataEmpty(baseData, minPixels);
         if (isBaseEmpty) {
             showToast('Both layers are empty in this area', { duration: 2000 });
-            cancelSelection();
+            restorePreviousSelection();
             return;
         }
 
@@ -802,6 +745,10 @@ function finalizeSelection() {
     // 进入 transform 模式
     transformToolState.stage = 'transforming';
     selectionStart = null;
+
+    // 清空保存的旧选区（新选区已创建成功，不需要再恢复旧选区）
+    transformToolState.previousSelection = null;
+    transformToolState.previousTransform = null;
 }
 
 /**
@@ -817,6 +764,51 @@ function cancelSelection() {
         ctx.clearRect(0, 0, overlay.width, overlay.height);
     }
     resetCursor();
+}
+
+/**
+ * 恢复之前的选区（新选区无效时调用）
+ */
+function restorePreviousSelection() {
+    selectionStart = null;
+    setBaseLayerDimmed(false);
+
+    // 清空 overlay
+    const overlay = sharedOverlay;
+    if (overlay) {
+        const ctx = overlay.getContext('2d');
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+    }
+
+    // 恢复旧选区
+    if (transformToolState.previousSelection && transformToolState.previousTransform) {
+        transformToolState.selection = transformToolState.previousSelection;
+        transformToolState.transform = transformToolState.previousTransform;
+        transformToolState.stage = 'transforming';
+
+        // 将旧选区像素还原到 paint 层（因为创建选区时清除了）
+        const paintCanvas = getSharedPaintCanvas();
+        if (paintCanvas && transformToolState.selection.sourceCanvas) {
+            const paintCtx = paintCanvas.getContext('2d');
+            paintCtx.drawImage(
+                transformToolState.selection.sourceCanvas,
+                transformToolState.selection.rect.x,
+                transformToolState.selection.rect.y
+            );
+        }
+
+        // 重绘
+        renderTransforming();
+
+        showToast('New selection invalid, restored previous selection', { duration: 2000 });
+    } else {
+        transformToolState.stage = 'idle';
+        resetCursor();
+    }
+
+    // 清空保存的状态
+    transformToolState.previousSelection = null;
+    transformToolState.previousTransform = null;
 }
 
 // === Transform Logic ===
@@ -1010,9 +1002,11 @@ function renderTransforming() {
  * 绘制变换轮廓
  */
 function drawTransformOutline(ctx, corners) {
+    const lineWidth = screenToCanvasLength(1);
+    const dashSize = screenToCanvasLength(4);
     ctx.strokeStyle = '#4a9eff';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash([dashSize, dashSize]);
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 4; i++) {
@@ -1091,12 +1085,13 @@ function drawHandles(ctx, corners) {
 
 /**
  * 清除选区
+ * @param {boolean} restorePixels - 是否在未变换时还原像素到 paint 层（默认 true）
  */
-function clearSelection() {
+function clearSelection(restorePixels = true) {
     const { selection } = transformToolState;
 
     if (selection) {
-        if (!selection.hasTransformed) {
+        if (restorePixels && !selection.hasTransformed) {
             // 用户框选后未做任何变换就放弃——还原像素到 paint 层原位
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
@@ -1129,6 +1124,10 @@ function clearSelection() {
     transformToolState.selection = null;
     transformToolState.transform = null;
     transformToolState.drag = { active: false };
+
+    // 注意：不清除 previousSelection/previousTransform
+    // 它们用于在创建新选区失败时恢复旧选区
+    // 在 restorePreviousSelection 或 finalizeSelection 成功后会清除
 }
 
 
@@ -1155,6 +1154,10 @@ function cleanupTransform() {
     transformToolState.selection = null;
     transformToolState.transform = null;
     transformToolState.drag = { active: false };
+
+    // 完全退出工具时清除所有状态
+    transformToolState.previousSelection = null;
+    transformToolState.previousTransform = null;
 }
 
 /**

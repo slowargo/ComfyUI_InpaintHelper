@@ -1,4 +1,4 @@
-import { getMaskEditorStore } from "./utils.js";
+import { getMaskEditorStore, displayToCanvas } from "./utils.js";
 import {
     transformToolState,
     cleanupTransform,
@@ -170,28 +170,6 @@ function isAnyCustomToolActive() {
 // === Clone Brush Functions ===
 
 /**
- * Map client (CSS) coordinates to canvas pixel coordinates.
- * Necessary because the canvas display size may differ from its intrinsic pixel size
- * (e.g. the canvas is rendered at 50% scale, so CSS pixels must be multiplied by 2).
- *
- * 进行坐标映射。需要进行坐标映射是因为 Canvas 的显示尺寸与实际像素尺寸可能不一致（画布可能以缩小/放大状态显示)
- *
- * @param {HTMLCanvasElement} canvas - The target canvas element
- * @param {number} clientX - Client X coordinate from the pointer event
- * @param {number} clientY - Client Y coordinate from the pointer event
- * @returns {{cx: number, cy: number}} Canvas pixel coordinates
- */
-function displayToCanvas(canvas, clientX, clientY) {
-    const rect = canvas.getBoundingClientRect(); // 获取 CSS 显示区域
-    return {
-        // 计算鼠标在显示区域内的相对位置，再按比例转换为像素坐标
-        // 例如缩小到 50%, rect.width 为 canvas.width 的一半，下面公式就相当于 offset * 2，放大回正确的像素位置
-        cx: (clientX - rect.left) * canvas.width  / rect.width,
-        cy: (clientY - rect.top)  * canvas.height / rect.height,
-    };
-}
-
-/**
  * Bind document-level capture pointer events for the Clone Brush tool.
  * Idempotent: does nothing if events are already bound.
  */
@@ -219,7 +197,7 @@ function onCloneMouseDown(e) {
     e.stopImmediatePropagation();
     e.preventDefault();
 
-    const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    const { x: cx, y: cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
     if (e.altKey || !editorState.cloneBrush.hasSample) {
         editorState.cloneBrush.hasSample  = true;
@@ -254,7 +232,7 @@ function onCloneMouseMove(e) {
         return;
     }
 
-    const {cx, cy} = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    const { x: cx, y: cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
     if (editorState.cloneBrush.isDrawing) {
         e.stopImmediatePropagation();
@@ -275,7 +253,7 @@ function onCloneMouseUp(e) {
 
     // When CapsLock is on or Shift is held, sample point moves with the mouse (preserving relative offset)
     // if (e.getModifierState('CapsLock') || e.shiftKey) {
-    //     const {cx, cy} = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    //     const { x: cx, y: cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
     //     const trackedX = editorState.cloneBrush.sampleX + (cx - editorState.cloneBrush.strokeStartX);
     //     const trackedY = editorState.cloneBrush.sampleY + (cy - editorState.cloneBrush.strokeStartY);
     //
@@ -496,7 +474,7 @@ function onSmudgeMouseDown(e) {
     e.stopImmediatePropagation();
     e.preventDefault();
 
-    const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    const { x: cx, y: cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
     // Sample composite at brush location
     const radius = getBrushRadius();
@@ -526,7 +504,7 @@ function onSmudgeMouseMove(e) {
         return;
     }
 
-    const { cx, cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    const { x: cx, y: cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
 
     if (editorState.smudgeBrush.isDrawing) {
         e.stopImmediatePropagation();
