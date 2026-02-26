@@ -75,15 +75,24 @@ function getBrushRadius() {
  */
 function initBrushToolOverlay() {
     const container = document.querySelector('#maskEditorCanvasContainer');
-    if (!container || container.querySelector('#brush-tool-overlay')) return;
+    if (!container) return;
 
     if (getComputedStyle(container).position === 'static') {
         container.style.position = 'relative';
     }
 
     const canvases = container.querySelectorAll('canvas');
+    if (canvases.length < 2) return;
+
     baseCanvas  = canvases[0];
     paintCanvas = canvases[1];
+
+    const existingOverlay = container.querySelector('#brush-tool-overlay');
+    if (existingOverlay) {
+        brushToolOverlay = existingOverlay;
+        setSharedOverlay(existingOverlay);
+        return;
+    }
 
     const overlay = document.createElement('canvas');
     overlay.id = 'brush-tool-overlay';
@@ -975,10 +984,12 @@ function cleanupAllBrushTools() {
     cleanupTransform();
 
     // Remove overlay element
-    if (brushToolOverlay) {
-        brushToolOverlay.remove();
-        brushToolOverlay = null;
-    }
+    const overlay = brushToolOverlay || document.querySelector('#maskEditorCanvasContainer #brush-tool-overlay');
+    if (overlay) overlay.remove();
+    brushToolOverlay = null;
+
+    // Clear transform module shared canvas references to avoid detached canvas retention
+    setSharedOverlay(null);
 
     // Clear canvas references
     baseCanvas = null;
