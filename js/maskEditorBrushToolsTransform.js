@@ -539,6 +539,7 @@ function clearPaintRect(rect) {
 
 /**
  * 按掩码清除 paint 层像素（仅清除 maskImageData 中 alpha>0 的像素）
+ * 用于点击自动选择区域，区域包含其他"对象"的内容时，仅擦除本"对象"的内容
  */
 function clearPaintByMask(rect, maskImageData) {
     const paintCanvas = getSharedPaintCanvas();
@@ -1190,7 +1191,8 @@ function finalizeSelection() {
         sourceCanvas: createSourceCanvas(sourceData),
         lastAppliedBounds: null,
         paintSnapshot: null,
-        hasTransformed: false
+        hasTransformed: false,
+        pendingTransform: false
     };
 
     // 剪切：从 paint 层清除选区像素
@@ -1436,7 +1438,10 @@ function endDrag() {
         transform?.corners
     );
     if (didGeometryChange) {
-        applyTransform();
+        // 延迟提交：拖动结束只更新预览，不立即写入 paint 层
+        if (transformToolState.selection) {
+            transformToolState.selection.pendingTransform = true;
+        }
     }
 
     transformToolState.drag.active = false;
@@ -1503,6 +1508,7 @@ function applyTransform() {
     // 6. 记录本次写入区域
     selection.lastAppliedBounds = bounds;
     selection.hasTransformed = true;
+    selection.pendingTransform = false;
 }
 
 // === Rendering ===
@@ -1626,6 +1632,11 @@ function clearSelection(restorePixels = true) {
     const { selection } = transformToolState;
 
     if (selection) {
+        // 如果有未提交的变换预览，在清除选区前一次性提交到 paint 层
+        if (selection.pendingTransform) {
+            applyTransform();
+        }
+
         if (restorePixels && !selection.hasTransformed) {
             // 框选后，paint 层原来的内容已经被剪切掉了。如果用户框选后未做任何变换就放弃，还原像素到 paint 层原位
             const paintCanvas = getSharedPaintCanvas();
