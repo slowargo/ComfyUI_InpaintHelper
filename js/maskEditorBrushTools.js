@@ -1,4 +1,4 @@
-import { getMaskEditorStore, displayToCanvas } from "./utils.js";
+import { getMaskEditorStore, displayToCanvas, getBrushOpacity, setBrushOpacity } from "./utils.js";
 import {
     transformToolState,
     cleanupTransform,
@@ -37,6 +37,36 @@ let isSpacePressed = false;
 let brushToolOverlay = null;
 let baseCanvas = null;
 let paintCanvas = null;
+
+// === Opacity Override State (for Clone/Smudge/Transform tools) ===
+const opacityOverrideState = {
+    originalOpacity: null,
+    isOverridden: false
+};
+
+/**
+ * Activate opacity override: save current opacity and set to 1 (fully opaque).
+ * Safe to call multiple times - only saves on first call.
+ */
+function activateOpacityOverride() {
+    if (!opacityOverrideState.isOverridden) {
+        opacityOverrideState.originalOpacity = getBrushOpacity();
+        opacityOverrideState.isOverridden = true;
+        setBrushOpacity(1);
+    }
+}
+
+/**
+ * Restore original opacity if currently overridden.
+ * Safe to call multiple times - only restores when actually overridden.
+ */
+function restoreOpacityOverride() {
+    if (opacityOverrideState.isOverridden) {
+        setBrushOpacity(opacityOverrideState.originalOpacity);
+        opacityOverrideState.originalOpacity = null;
+        opacityOverrideState.isOverridden = false;
+    }
+}
 
 // === Brush Tool Functions ===
 
@@ -186,6 +216,9 @@ function deactivateAllCustomTools() {
         const ctx = brushToolOverlay.getContext('2d');
         ctx?.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
     }
+
+    // Restore original opacity if overridden
+    restoreOpacityOverride();
 }
 
 /**
@@ -345,6 +378,7 @@ function applyCloneStroke(cx, cy) {
 function stampClone(drawX, drawY, radius) {
     const r = Math.ceil(radius);
     const sigma = radius * 0.4;
+    const opacity = getBrushOpacity();
 
     const srcX = editorState.cloneBrush.sampleX + (drawX - editorState.cloneBrush.strokeStartX);
     const srcY = editorState.cloneBrush.sampleY + (drawY - editorState.cloneBrush.strokeStartY);
@@ -382,7 +416,7 @@ function stampClone(drawX, drawY, radius) {
             const sR = srcData.data[i];
             const sG = srcData.data[i + 1];
             const sB = srcData.data[i + 2];
-            const sA = srcData.data[i + 3] / 255 * weight; // Apply brush falloff
+            const sA = srcData.data[i + 3] / 255 * weight * opacity; // Apply brush falloff and opacity
 
             // Destination pixel
             const dR = dstData.data[i];
@@ -653,6 +687,8 @@ const SMUDGE_STRENGTH = 0.8;
 function stampSmudge(drawX, drawY, radius) {
     const r = Math.ceil(radius);
     const sigma = radius * 0.4;
+    // const opacity = getBrushOpacity();
+    const opacity = 1;
 
     const dstL = Math.max(0, Math.round(drawX - r));
     const dstT = Math.max(0, Math.round(drawY - r));
@@ -686,7 +722,7 @@ function stampSmudge(drawX, drawY, radius) {
             if (dist > radius) continue;
 
             const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
-            const s = SMUDGE_STRENGTH * weight;
+            const s = SMUDGE_STRENGTH * weight * opacity; // Apply brush opacity
 
             const di = (py * w + px) * 4;
 
@@ -799,6 +835,7 @@ function createCloneButton() {
         const willActivate = !editorState.cloneBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            activateOpacityOverride();
             editorState.cloneBrush.active = true;
             updateCloneStyle();
         }
@@ -837,6 +874,7 @@ function createSmudgeButton() {
         const willActivate = !editorState.smudgeBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            activateOpacityOverride();
             editorState.smudgeBrush.active = true;
             updateSmudgeStyle();
         }
@@ -887,6 +925,7 @@ function createTransformButton() {
         const willActivate = !isTransformActive();
         deactivateAllCustomTools();
         if (willActivate) {
+            activateOpacityOverride();
             // 直接激活Transform工具，不使用toggleTransform
             initTransformToolEvents();
             updateTransformStyle();
@@ -929,6 +968,7 @@ function handleBrushToolKeydown(e) {
         const willActivate = !editorState.cloneBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            activateOpacityOverride();
             editorState.cloneBrush.active = true;
             updateCloneStyle();
         }
@@ -945,6 +985,7 @@ function handleBrushToolKeydown(e) {
         const willActivate = !editorState.smudgeBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            activateOpacityOverride();
             editorState.smudgeBrush.active = true;
             updateSmudgeStyle();
         }
@@ -961,6 +1002,7 @@ function handleBrushToolKeydown(e) {
         const willActivate = !isTransformActive();
         deactivateAllCustomTools();
         if (willActivate) {
+            activateOpacityOverride();
             initTransformToolEvents();
             updateTransformStyle();
         }
@@ -1032,6 +1074,9 @@ function cleanupAllBrushTools() {
     // Clear canvas references
     baseCanvas = null;
     paintCanvas = null;
+
+    // Restore original opacity if overridden
+    restoreOpacityOverride();
 }
 
 // === Exports ===

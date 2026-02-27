@@ -281,3 +281,61 @@ export function isMaskNonEmpty() {
     }
     return false;
 }
+
+// === Brush Opacity Utilities ===
+
+/**
+ * Get the current brush opacity, preferring Pinia store over DOM.
+ * @returns {number} Opacity value between 0 and 1, defaults to 1 if unavailable
+ */
+export function getBrushOpacity() {
+    // 1) Prefer the store value (source of truth)
+    const store = getMaskEditorStore();
+    const storeOpacity = store?.brushSettings?.opacity;
+    if (Number.isFinite(storeOpacity) && storeOpacity >= 0 && storeOpacity <= 1) {
+        return storeOpacity;
+    }
+
+    // 2) Fallback to DOM: find opacity slider by characteristics (max <= 1, step <= 0.1)
+    const rangeInputs = document.querySelectorAll('input.maskEditor_sidePanelBrushRange');
+    for (const input of rangeInputs) {
+        const max = parseFloat(input.max);
+        const step = parseFloat(input.step);
+        if (max <= 1 && step <= 0.1) {
+            const parsed = parseFloat(input.value);
+            if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+                return parsed;
+            }
+        }
+    }
+
+    // Default to fully opaque
+    return 1;
+}
+
+/**
+ * Set brush opacity to both Pinia store and DOM slider.
+ * @param {number} opacity - Opacity value between 0 and 1
+ */
+export function setBrushOpacity(opacity) {
+    const clampedOpacity = Math.max(0, Math.min(1, opacity));
+
+    // 1) Write to store
+    const store = getMaskEditorStore();
+    if (store?.setBrushOpacity) {
+        store.setBrushOpacity(clampedOpacity);
+    }
+
+    // 2) Sync DOM: find opacity slider and update
+    const rangeInputs = document.querySelectorAll('input.maskEditor_sidePanelBrushRange');
+    for (const input of rangeInputs) {
+        const max = parseFloat(input.max);
+        const step = parseFloat(input.step);
+        if (max <= 1 && step <= 0.1) {
+            input.value = clampedOpacity;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            break;
+        }
+    }
+}

@@ -1,4 +1,4 @@
-import { getMaskEditorStore, displayToCanvas, getCanvasScale, showToast } from "./utils.js";
+import { getMaskEditorStore, displayToCanvas, getCanvasScale, showToast, getBrushOpacity } from "./utils.js";
 
 // === Shared Resources Access ===
 let sharedOverlay = null;
@@ -1494,8 +1494,11 @@ function applyTransform() {
     // 使用透视变换渲染
     drawPerspectiveQuad(tempCtx, selection.sourceCanvas, srcQuad, localCorners, 20);
 
-    // 5. 合成到 paint 层
+    // 5. 合成到 paint 层（应用 brush opacity）
+    const opacity = getBrushOpacity();
+    paintCtx.globalAlpha = opacity;
     paintCtx.drawImage(transformToolState.tempCanvas, bounds.x, bounds.y);
+    paintCtx.globalAlpha = 1;
 
     // 6. 记录本次写入区域
     selection.lastAppliedBounds = bounds;
@@ -1558,10 +1561,17 @@ function drawTransformedImage(ctx, corners) {
     // 源四边形（sourceCanvas 的完整区域）
     const srcQuad = getSourceCorners(selection.rect);
 
+    // 应用 brush opacity 到预览
+    const opacity = getBrushOpacity();
+    ctx.save();
+    ctx.globalAlpha = opacity;
+
     // 使用透视变换渲染到 overlay
     drawPerspectiveQuad(ctx, selection.sourceCanvas, srcQuad, corners, 20);
 
-    // 绘制轮廓线
+    ctx.restore();
+
+    // 绘制轮廓线（不受 opacity 影响）
     drawTransformOutline(ctx, corners);
 }
 
