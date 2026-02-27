@@ -229,6 +229,24 @@ function isAnyCustomToolActive() {
     return editorState.cloneBrush.active || editorState.smudgeBrush.active || isTransformActive();
 }
 
+/**
+ * Ensure paint layer is visible by triggering Vue's checkbox change handler.
+ * Checkbox order in ImageLayerSettingsPanel: [mask, paint, baseImage]
+ */
+function ensurePaintLayerVisible() {
+    const checkboxes = document.querySelectorAll('.maskEditor_sidePanelLayerCheckbox');
+    const paintCheckbox = checkboxes?.[1];
+    if (!paintCheckbox) {
+        console.warn("[slowargo.js] Paint layer checkbox not found");
+        return;
+    }
+
+    if (!paintCheckbox.checked) {
+        paintCheckbox.checked = true;
+        paintCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+}
+
 // === Clone Brush Functions ===
 
 /**
@@ -835,6 +853,7 @@ function createCloneButton() {
         const willActivate = !editorState.cloneBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            ensurePaintLayerVisible();
             activateOpacityOverride();
             editorState.cloneBrush.active = true;
             updateCloneStyle();
@@ -874,6 +893,7 @@ function createSmudgeButton() {
         const willActivate = !editorState.smudgeBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            ensurePaintLayerVisible();
             activateOpacityOverride();
             editorState.smudgeBrush.active = true;
             updateSmudgeStyle();
@@ -925,6 +945,7 @@ function createTransformButton() {
         const willActivate = !isTransformActive();
         deactivateAllCustomTools();
         if (willActivate) {
+            ensurePaintLayerVisible();
             activateOpacityOverride();
             // 直接激活Transform工具，不使用toggleTransform
             initTransformToolEvents();
@@ -968,6 +989,7 @@ function handleBrushToolKeydown(e) {
         const willActivate = !editorState.cloneBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            ensurePaintLayerVisible();
             activateOpacityOverride();
             editorState.cloneBrush.active = true;
             updateCloneStyle();
@@ -985,6 +1007,7 @@ function handleBrushToolKeydown(e) {
         const willActivate = !editorState.smudgeBrush.active;
         deactivateAllCustomTools();
         if (willActivate) {
+            ensurePaintLayerVisible();
             activateOpacityOverride();
             editorState.smudgeBrush.active = true;
             updateSmudgeStyle();
@@ -1002,6 +1025,7 @@ function handleBrushToolKeydown(e) {
         const willActivate = !isTransformActive();
         deactivateAllCustomTools();
         if (willActivate) {
+            ensurePaintLayerVisible();
             activateOpacityOverride();
             initTransformToolEvents();
             updateTransformStyle();
