@@ -44,19 +44,36 @@ let globalBrushRadius = 20;
 let lastBrushReadTime = 0;
 
 /**
- * Get the current brush radius, reading from the DOM input at most once per 500ms.
- * Falls back to the cached value when the input is absent or the cache is fresh.
+ * Get the current brush radius.
+ * Prefers the Pinia store value (read every time), then falls back to the DOM size slider (cached for 500ms).
  * @returns {number} The current brush radius in pixels
  */
 function getBrushRadius() {
     const now = Date.now();
-    if (now - lastBrushReadTime >= 500) {
-        const rangeInput = document.querySelector('input.maskEditor_sidePanelBrushRange');
-        if (rangeInput?.value) {
-            globalBrushRadius = parseFloat(rangeInput.value);
-            lastBrushReadTime = now;
+
+    // 1) Always read from store (source of truth, no caching)
+    const store = getMaskEditorStore();
+    const storeSize = store?.brushSettings?.size;
+    if (Number.isFinite(storeSize)) {
+        globalBrushRadius = storeSize;
+        return globalBrushRadius;
+    }
+
+    // 2) Fallback to DOM: use cache to avoid excessive DOM reads
+    if (now - lastBrushReadTime < 500) {
+        return globalBrushRadius;
+    }
+
+    const rangeInputs = document.querySelectorAll('input.maskEditor_sidePanelBrushRange');
+    if (rangeInputs.length > 0) {
+        const sizeInput = Array.from(rangeInputs).find((input) => input.max === '500') || rangeInputs[0];
+        const parsed = parseFloat(sizeInput.value);
+        if (Number.isFinite(parsed)) {
+            globalBrushRadius = parsed;
         }
     }
+
+    lastBrushReadTime = now;
     return globalBrushRadius;
 }
 
@@ -98,6 +115,9 @@ function initBrushToolOverlay() {
     overlay.id = 'brush-tool-overlay';
     overlay.width  = canvases[0].width;
     overlay.height = canvases[0].height;
+    // Match other canvas elements' CSS positioning to fill container properly
+    overlay.className = 'absolute top-0 left-0 w-full h-full';
+    overlay.style.zIndex = '50'; // Above other canvases (z-40 is highest native)
     container.appendChild(overlay);
     brushToolOverlay = overlay;
     setSharedOverlay(overlay);
@@ -119,6 +139,7 @@ function isPointerInBrushArea(e) {
     return e.clientX >= rect.left && e.clientX <= rect.right &&
            e.clientY >= rect.top  && e.clientY <= rect.bottom;
 }
+
 
 // Module-level button references for style updates
 let cloneBtnRef = null;
