@@ -15,6 +15,8 @@ import {
     initCloneToolEvents,
     initSmudgeToolEvents,
     cleanupAllBrushTools,
+    deactivateAllCustomTools,
+    brushToolOverlay,
 } from "./maskEditorBrushTools.js";
 
 loadCSS(import.meta.url, "./maskEditorTurbo.css");
@@ -687,6 +689,7 @@ export function initFastForwardMode() {
     let currentDialog = null;
     let eraserToolEl = null;
     let eraserAltClickHandler = null;
+    let toolPanelHandler = null;
 
     // Note: Keyboard events are bound/unbound dynamically in onEditorReady and cleanup
 
@@ -734,6 +737,16 @@ export function initFastForwardMode() {
             dialog.addEventListener('click', dialogClickHandler);
             dialog.dataset.blurListenerAdded = 'true';
         }
+
+        // Click on left toolbar deactivates all custom brush tools
+        const toolPanel = dialog.querySelector('.maskEditor_toolPanelContainer')?.parentElement;
+        if (toolPanel) {
+            toolPanelHandler = (e) => {
+                deactivateAllCustomTools();
+                brushToolOverlay?.classList.remove('active');
+            };
+            toolPanel.addEventListener('click', toolPanelHandler);
+        }
     }
 
     function waitForSidePanel(dialog) {
@@ -779,6 +792,13 @@ export function initFastForwardMode() {
         }
         eraserToolEl = null;
         eraserAltClickHandler = null;
+
+        // Cleanup tool panel click listener
+        if (toolPanelHandler) {
+            const toolPanel = currentDialog?.querySelector('.maskEditor_toolPanelContainer')?.parentElement;
+            toolPanel?.removeEventListener('click', toolPanelHandler);
+            toolPanelHandler = null;
+        }
 
         // Cleanup UI elements
         cleanupFastForwardUI(currentDialog);
