@@ -1,11 +1,11 @@
-import { getMaskEditorStore, displayToCanvas, getBrushOpacity, setBrushOpacity } from "./utils.js";
+import { getMaskEditorStore, displayToCanvas, getBrushOpacity, setBrushOpacity } from "../utils.js";
 import {
-    transformToolState,
     cleanupTransform,
     isTransformActive,
     initTransformToolEvents,
-    setSharedOverlay
-} from "./maskEditorBrushToolsTransform.js";
+} from "./transform/maskEditorBrushToolsTransform.js";
+import { ensurePaintLayerVisible, saveCanvasHistory, getMaskEditorCanvasContainer } from "./common/helpers.js";
+import { setSharedOverlay, setSharedCanvases } from "./common/sharedCanvasRefs.js";
 
 // === Editor State ===
 const editorState = {
@@ -121,7 +121,7 @@ function getBrushRadius() {
  * 3. 坐标映射基准: 覆盖层作为坐标转换的参考对象
  */
 function initBrushToolOverlay() {
-    const container = document.querySelector('#maskEditorCanvasContainer');
+    const container = getMaskEditorCanvasContainer();
     if (!container) return;
 
     if (getComputedStyle(container).position === 'static') {
@@ -133,6 +133,7 @@ function initBrushToolOverlay() {
 
     baseCanvas  = canvases[0];
     paintCanvas = canvases[1];
+    setSharedCanvases(baseCanvas, paintCanvas);
 
     const existingOverlay = container.querySelector('#brush-tool-overlay');
     if (existingOverlay) {
@@ -167,7 +168,7 @@ function isPointerInBrushArea(e) {
     if (!brushToolOverlay) return false;
     const rect = brushToolOverlay.getBoundingClientRect();
     return e.clientX >= rect.left && e.clientX <= rect.right &&
-           e.clientY >= rect.top  && e.clientY <= rect.bottom;
+        e.clientY >= rect.top  && e.clientY <= rect.bottom;
 }
 
 
@@ -227,24 +228,6 @@ function deactivateAllCustomTools() {
  */
 function isAnyCustomToolActive() {
     return editorState.cloneBrush.active || editorState.smudgeBrush.active || isTransformActive();
-}
-
-/**
- * Ensure paint layer is visible by triggering Vue's checkbox change handler.
- * Checkbox order in ImageLayerSettingsPanel: [mask, paint, baseImage]
- */
-function ensurePaintLayerVisible() {
-    const checkboxes = document.querySelectorAll('.maskEditor_sidePanelLayerCheckbox');
-    const paintCheckbox = checkboxes?.[1];
-    if (!paintCheckbox) {
-        console.warn("[slowargo.js] Paint layer checkbox not found");
-        return;
-    }
-
-    if (!paintCheckbox.checked) {
-        paintCheckbox.checked = true;
-        paintCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-    }
 }
 
 // === Clone Brush Functions ===
@@ -341,8 +324,7 @@ function onCloneMouseUp(e) {
     //     editorState.cloneBrush.sampleY = trackedY;
     // }
 
-    const store = getMaskEditorStore();
-    store?.canvasHistory?.saveState?.();
+    saveCanvasHistory();
 }
 
 /**
@@ -519,7 +501,7 @@ function drawCrosshair(ctx, x, y, color, size = 8) {
  */
 function cleanupCloneTool() {
     if (editorState.cloneBrush.isDrawing) {
-        getMaskEditorStore()?.canvasHistory?.saveState?.();
+        saveCanvasHistory();
         editorState.cloneBrush.isDrawing = false;
     }
 
@@ -618,8 +600,7 @@ function onSmudgeMouseUp(e) {
     // Clear carried buffer
     editorState.smudgeBrush.carriedBuffer = null;
 
-    const store = getMaskEditorStore();
-    store?.canvasHistory?.saveState?.();
+    saveCanvasHistory();
 }
 
 /**
@@ -809,7 +790,7 @@ function renderSmudgeOverlay(mouseX, mouseY) {
  */
 function cleanupSmudgeTool() {
     if (editorState.smudgeBrush.isDrawing) {
-        getMaskEditorStore()?.canvasHistory?.saveState?.();
+        saveCanvasHistory();
         editorState.smudgeBrush.isDrawing = false;
     }
 
@@ -1098,6 +1079,7 @@ function cleanupAllBrushTools() {
     // Clear canvas references
     baseCanvas = null;
     paintCanvas = null;
+    setSharedCanvases(null, null);
 
     // Restore original opacity if overridden
     restoreOpacityOverride();

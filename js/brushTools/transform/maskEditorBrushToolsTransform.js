@@ -1,40 +1,10 @@
-import { getMaskEditorStore, displayToCanvas, getCanvasScale, showToast, getBrushOpacity } from "./utils.js";
-
-// === Shared Resources Access ===
-let sharedOverlay = null;
-let sharedBaseCanvas = null;
-let sharedPaintCanvas = null;
-
-/**
- * 设置与其他 brush 共享的 overlay 画布（当 overlay 重新创建时调用）
- */
-function setSharedOverlay(overlay) {
-    sharedOverlay = overlay;
-    sharedBaseCanvas = null;
-    sharedPaintCanvas = null;
-}
-
-/**
- * 获取共享的 base 画布
- */
-function getSharedBaseCanvas() {
-    if (!sharedBaseCanvas) {
-        const canvases = document.querySelectorAll('#maskEditorCanvasContainer canvas');
-        sharedBaseCanvas = canvases[0];
-    }
-    return sharedBaseCanvas;
-}
-
-/**
- * 获取共享的 paint 画布
- */
-function getSharedPaintCanvas() {
-    if (!sharedPaintCanvas) {
-        const canvases = document.querySelectorAll('#maskEditorCanvasContainer canvas');
-        sharedPaintCanvas = canvases[1];
-    }
-    return sharedPaintCanvas;
-}
+import { displayToCanvas, getCanvasScale, showToast, getBrushOpacity } from "../../utils.js";
+import { saveCanvasHistory } from "../common/helpers.js";
+import {
+    getSharedOverlay,
+    getSharedBaseCanvas,
+    getSharedPaintCanvas,
+} from "../common/sharedCanvasRefs.js";
 
 /**
  * 将屏幕长度转换为 canvas 坐标长度
@@ -42,7 +12,7 @@ function getSharedPaintCanvas() {
  * @returns {number} canvas 坐标系中的长度
  */
 function screenToCanvasLength(screenLength) {
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (!overlay) return screenLength;
     const scale = getCanvasScale(overlay);
     // 使用平均缩放比例，保持圆形不变形
@@ -317,18 +287,16 @@ const transformToolState = {
         startTransform: null
     },
 
-    // 可复用的临时画布
-    tempCanvas: null,
-
     // 事件绑定状态
     eventsBound: false,
 
     // 最后的鼠标位置
     lastMousePos: null,
 
-    // 保存的旧选区状态（用于新选区无效时恢复）
-    previousSelection: null,
-    previousTransform: null,
+    // 保存的旧选区会话（用于新选区无效时恢复）
+    // shouldRestoreCutPixels: 旧会话是否属于“仅剪切未变换”的 paint 选区。
+    // 注意该判断必须在 clearSelection 前做，因为 clearSelection 可能会提交并重置 dirty 标记。
+    previousSession: null,
 
     // 准实时预览控制
     preview: {
@@ -338,6 +306,9 @@ const transformToolState = {
         timerId: null         // setTimeout ID
     }
 };
+
+// 透视绘制使用的可复用画布；不放入状态树，避免状态对象承担大块像素缓存。
+let reusableTransformCanvas = null;
 
 // === Math Utilities ===
 
@@ -523,16 +494,14 @@ function releaseSelectionResources(selection) {
     if (!selection) return;
     releaseCanvasBuffer(selection.sourceCanvas);
     selection.sourceCanvas = null;
-    selection.paintSnapshot = null;
-    selection.lastAppliedBounds = null;
 }
 
 /**
  * 将未提交的 paint 选区内容回写到 paint 层。
- * 仅处理 "从 paint 剪切但未发生变换" 的场景，避免切换新选区时内容丢失。
+ * 调用方负责保证该选区属于“仅剪切未变换”场景。
  */
 function restoreUntransformedPaintSelection(selection) {
-    if (!selection || !selection.cutFromPaint || selection.hasTransformed || !selection.sourceCanvas) {
+    if (!selection || !selection.cutFromPaint || !selection.sourceCanvas) {
         return;
     }
 
@@ -958,13 +927,13 @@ function getCurrentCursorType(pos) {
  * 更新自定义光标（在 pointermove 中调用）
  */
 function updateCustomCursorAt(clientX, clientY) {
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (!overlay) return;
 
     // 检查是否在画布区域内
     const rect = overlay.getBoundingClientRect();
     const isOverCanvas = clientX >= rect.left && clientX <= rect.right &&
-                         clientY >= rect.top && clientY <= rect.bottom;
+        clientY >= rect.top && clientY <= rect.bottom;
 
     if (!isOverCanvas) {
         showCustomCursor(false);
@@ -1009,7 +978,6 @@ function initTransformToolEvents() {
     createCustomCursor();
     // 立即设置初始光标为 crosshair（框选模式）
     updateCustomCursor(0, 0, 'crosshair');
-    console.log("[Transform Tool] Events bound to document (capture)");
 }
 
 /**
@@ -1019,7 +987,7 @@ function onTransformPointerDown(e) {
     if (!isTransformActive()) return;
 
     // 获取共享资源
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (!overlay) return;
 
     // 检查是否在画布区域内
@@ -1049,8 +1017,16 @@ function onTransformPointerDown(e) {
         }
 
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
-        transformToolState.previousSelection = transformToolState.selection;
-        transformToolState.previousTransform = transformToolState.transform;
+        const shouldRestoreCutPixels = Boolean(
+            transformToolState.selection?.cutFromPaint &&
+            !transformToolState.selection?.pendingTransform &&
+            !transformToolState.selection?.paintDirtySinceLastSave
+        );
+        transformToolState.previousSession = {
+            selection: transformToolState.selection,
+            transform: transformToolState.transform,
+            shouldRestoreCutPixels,
+        };
         // 这里允许 clearSelection 内部按 dirty 标记落盘（若此前有实际变换提交），
         // 但禁止回填像素，并保留资源供后续失败回滚。
         clearSelection(false, true); // 不还原像素，并保留资源用于回滚
@@ -1099,7 +1075,7 @@ function onTransformPointerDown(e) {
 function onTransformPointerMove(e) {
     if (!isTransformActive()) return;
 
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (!overlay) return;
 
     const pos = displayToCanvas(overlay, e.clientX, e.clientY);
@@ -1149,7 +1125,7 @@ function startSelection(pos) {
 function updateSelection(pos) {
     if (!selectionStart) return;
 
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (!overlay) return;
 
     const ctx = overlay.getContext('2d');
@@ -1215,7 +1191,7 @@ function finalizeSelection() {
     const rawRect = normalizeRect(selectionStart, currentPos);
     let rect = snapRectToCanvasPixels(rawRect, canvasWidth, canvasHeight);
     let sourceData = null;
-    let sourceLayer = 'paint'; // 'paint' | 'base'
+    let cutFromPaint = true;
     let useMaskClear = false;
 
     // 过滤过小的选区
@@ -1233,7 +1209,7 @@ function finalizeSelection() {
             return;
         }
         sourceData = autoSelection.imageData;
-        sourceLayer = 'paint';
+        cutFromPaint = true;
         useMaskClear = true;
     }
 
@@ -1248,7 +1224,7 @@ function finalizeSelection() {
         const isEmpty = isImageDataEmpty(paintData, minPixels);
 
         sourceData = paintData;
-        sourceLayer = 'paint';
+        cutFromPaint = true;
         // paint 层为空时，使用 base 层内容作为变换源
         if (isEmpty) {
             // 从 base 层检测选区内容
@@ -1261,27 +1237,23 @@ function finalizeSelection() {
                 return;
             }
             sourceData = baseData;
-            sourceLayer = 'base';
+            cutFromPaint = false;
         }
     }
 
     transformToolState.selection = {
         rect: rect,
         sourceCanvas: createSourceCanvas(sourceData),
-        sourceLayer: sourceLayer,
         // true 表示该选区创建时对 paint 层做过剪切；后续 clearSelection 可能需要回填。
-        cutFromPaint: sourceLayer === 'paint',
+        cutFromPaint,
         // true 表示该选区已对 paint 做过“有效提交”；仅该标记为 true 时允许落一次 history。
         paintDirtySinceLastSave: false,
-        lastAppliedBounds: null,
-        paintSnapshot: null,
-        hasTransformed: false,
         pendingTransform: false
     };
 
     // 剪切：仅当源来自 paint 层时，才从 paint 层清除选区像素。
     // 注意：这一步是“进入浮动选区编辑态”，不是最终提交，不写 history。
-    if (sourceLayer === 'paint') {
+    if (cutFromPaint) {
         if (useMaskClear) {
             clearPaintByMask(rect, sourceData);
         } else {
@@ -1307,25 +1279,11 @@ function finalizeSelection() {
     selectionStart = null;
 
     // 新选区创建成功：提交/释放旧选区
-    restoreUntransformedPaintSelection(transformToolState.previousSelection);
-    releaseSelectionResources(transformToolState.previousSelection);
-    transformToolState.previousSelection = null;
-    transformToolState.previousTransform = null;
-}
-
-/**
- * 取消框选
- */
-function cancelSelection() {
-    selectionStart = null;
-    setBaseLayerDimmed(false);
-    transformToolState.stage = 'idle';
-    const overlay = sharedOverlay;
-    if (overlay) {
-        const ctx = overlay.getContext('2d');
-        ctx.clearRect(0, 0, overlay.width, overlay.height);
+    if (transformToolState.previousSession?.shouldRestoreCutPixels) {
+        restoreUntransformedPaintSelection(transformToolState.previousSession.selection);
     }
-    resetCursor();
+    releaseSelectionResources(transformToolState.previousSession?.selection);
+    transformToolState.previousSession = null;
 }
 
 /**
@@ -1336,16 +1294,16 @@ function restorePreviousSelection() {
     setBaseLayerDimmed(false);
 
     // 清空 overlay
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (overlay) {
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, overlay.width, overlay.height);
     }
 
     // 恢复旧选区
-    if (transformToolState.previousSelection && transformToolState.previousTransform) {
-        transformToolState.selection = transformToolState.previousSelection;
-        transformToolState.transform = transformToolState.previousTransform;
+    if (transformToolState.previousSession?.selection && transformToolState.previousSession?.transform) {
+        transformToolState.selection = transformToolState.previousSession.selection;
+        transformToolState.transform = transformToolState.previousSession.transform;
         transformToolState.stage = 'transforming';
         // 重绘
         renderTransforming();
@@ -1356,8 +1314,7 @@ function restorePreviousSelection() {
     }
 
     // 清空保存的状态
-    transformToolState.previousSelection = null;
-    transformToolState.previousTransform = null;
+    transformToolState.previousSession = null;
 }
 
 // === Transform Logic ===
@@ -1538,32 +1495,22 @@ function applyTransform() {
 
     const corners = transform.corners;
 
-    // 1. 清除上一次变换写入的区域
-    if (selection.lastAppliedBounds && selection.paintSnapshot) {
-        const paintCtx = paintCanvas.getContext('2d');
-        paintCtx.putImageData(selection.paintSnapshot,
-            selection.lastAppliedBounds.x, selection.lastAppliedBounds.y);
-    }
-
-    // 2. 计算本次变换的 bounding box
+    // 计算本次变换的 bounding box
     const bounds = getBounds(corners);
 
     // 如果变换后的区域无效，跳过
     if (bounds.width <= 0 || bounds.height <= 0) return;
 
-    // 3. 保存 paint 层在新 bounds 区域的快照
-    const paintCtx = paintCanvas.getContext('2d', { willReadFrequently: true });
-    selection.paintSnapshot = paintCtx.getImageData(
-        bounds.x, bounds.y, bounds.width, bounds.height);
-
-    // 4. 渲染到临时画布
-    if (!transformToolState.tempCanvas) {
-        transformToolState.tempCanvas = document.createElement('canvas');
+    // 渲染到临时画布（模块级复用，避免每次申请新画布）
+    if (!reusableTransformCanvas) {
+        reusableTransformCanvas = document.createElement('canvas');
     }
-    transformToolState.tempCanvas.width = bounds.width;
-    transformToolState.tempCanvas.height = bounds.height;
-    const tempCtx = transformToolState.tempCanvas.getContext('2d');
+    reusableTransformCanvas.width = bounds.width;
+    reusableTransformCanvas.height = bounds.height;
+    const tempCtx = reusableTransformCanvas.getContext('2d');
     tempCtx.clearRect(0, 0, bounds.width, bounds.height);
+
+    const paintCtx = paintCanvas.getContext('2d', { willReadFrequently: true });
 
     // 计算目标四边形（相对于临时画布的本地坐标）
     const localCorners = corners.map(c => ({
@@ -1577,15 +1524,13 @@ function applyTransform() {
     // 使用透视变换渲染
     drawPerspectiveQuad(tempCtx, selection.sourceCanvas, srcQuad, localCorners, 20);
 
-    // 5. 合成到 paint 层（应用 brush opacity）
+    // 合成到 paint 层（应用 brush opacity）
     const opacity = getBrushOpacity();
     paintCtx.globalAlpha = opacity;
-    paintCtx.drawImage(transformToolState.tempCanvas, bounds.x, bounds.y);
+    paintCtx.drawImage(reusableTransformCanvas, bounds.x, bounds.y);
     paintCtx.globalAlpha = 1;
 
-    // 6. 记录本次写入区域
-    selection.lastAppliedBounds = bounds;
-    selection.hasTransformed = true;
+    // 记录：该选区已对 paint 产生有效提交
     selection.pendingTransform = false;
     selection.paintDirtySinceLastSave = true;
 }
@@ -1596,7 +1541,7 @@ function applyTransform() {
  * 渲染 Transform 模式
  */
 function renderTransforming() {
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (!overlay || transformToolState.stage !== 'transforming') return;
 
     const ctx = overlay.getContext('2d');
@@ -1639,9 +1584,6 @@ function drawTransformedImage(ctx, corners) {
         drawTransformOutline(ctx, corners);
         return;
     }
-
-    // 计算边界框用于裁剪
-    const bounds = getBounds(corners);
 
     // 源四边形（sourceCanvas 的完整区域）
     const srcQuad = getSourceCorners(selection.rect);
@@ -1721,7 +1663,7 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
         // 当没有进行移动/变换时，applyTransform没有触发，这里应该把内容还给 paint 层，避免内容丢失
         // 如果选区从 base 层创建，paint 层一直是空，不需要还原
         // 回填仅用于撤销“进入选区时的剪切”，属于 no-op 还原，不应计入 history。
-        if (restorePixels && !selection.hasTransformed && selection.cutFromPaint) {
+        if (restorePixels && selection.cutFromPaint && !selection.paintDirtySinceLastSave) {
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
                 const paintCtx = paintCanvas.getContext('2d');
@@ -1733,8 +1675,7 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
         // 统一 history 策略：
         // 仅在 paint 已发生“有效提交”时保存一次；纯剪切/回填不保存。
         if (selection.paintDirtySinceLastSave) {
-            getMaskEditorStore()?.canvasHistory?.saveState?.();
-            console.log('Saved state clearSelection');
+            saveCanvasHistory();
             selection.paintDirtySinceLastSave = false;
         }
 
@@ -1744,7 +1685,7 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
     }
 
     // 清空 overlay
-    const overlay = sharedOverlay;
+    const overlay = getSharedOverlay();
     if (overlay) {
         const ctx = overlay.getContext('2d');
         ctx.clearRect(0, 0, overlay.width, overlay.height);
@@ -1762,8 +1703,8 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
     transformToolState.transform = null;
     transformToolState.drag = { active: false };
 
-    // 注意：不清除 previousSelection/previousTransform
-    // 它们用于在创建新选区失败时恢复旧选区
+    // 注意：不清除 previousSession
+    // previousSession 用于在创建新选区失败时恢复旧选区
     // 在 restorePreviousSelection 或 finalizeSelection 成功后会清除
 }
 
@@ -1772,7 +1713,7 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
  * 清理 Transform 工具
  */
 function cleanupTransform() {
-    const previousSelectionToDispose = transformToolState.previousSelection;
+    const previousSelectionToDispose = transformToolState.previousSession?.selection;
 
     // 取消待执行的预览渲染
     cancelPendingRender();
@@ -1804,10 +1745,9 @@ function cleanupTransform() {
     transformToolState.drag = { active: false };
 
     // 完全退出工具时清除所有状态
-    transformToolState.previousSelection = null;
-    transformToolState.previousTransform = null;
-    releaseCanvasBuffer(transformToolState.tempCanvas);
-    transformToolState.tempCanvas = null;
+    transformToolState.previousSession = null;
+    releaseCanvasBuffer(reusableTransformCanvas);
+    reusableTransformCanvas = null;
 
     // 重置预览状态
     transformToolState.preview.lastRenderTime = 0;
@@ -1825,15 +1765,8 @@ function isTransformActive() {
 // === Exports ===
 
 export {
-    // 状态
-    transformToolState,
-
     // 工具管理
     initTransformToolEvents,
     cleanupTransform,
     isTransformActive,
-    setSharedOverlay,
-
-    // 渲染
-    renderTransforming
 };

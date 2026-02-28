@@ -17,7 +17,7 @@ import {
     cleanupAllBrushTools,
     deactivateAllCustomTools,
     brushToolOverlay,
-} from "./maskEditorBrushTools.js";
+} from "./brushTools/maskEditorBrushTools.js";
 
 loadCSS(import.meta.url, "./maskEditorTurbo.css");
 
