@@ -219,6 +219,7 @@ function onTransformPointerDown(e) {
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
         const shouldRestoreCutPixels = Boolean(
             transformToolState.selection?.cutFromPaint &&
+            !transformToolState.selection?.hasAppliedTransform &&
             !transformToolState.selection?.pendingTransform &&
             !transformToolState.selection?.paintDirtySinceLastSave
         );
@@ -246,27 +247,29 @@ function onTransformPointerDown(e) {
         transformToolState.stage = 'selecting';
         startSelection(pos);
     }
-/*
-  1. 未变换切换选区
+    /*
+      回归用例（围绕外部点击触发 clearSelection(false, true) 的状态流）:
 
-  - 步骤：在 paint 画一块 -> Transform 框选 -> 不拖动，直接点外部新建选区。
-  - 预期：原 paint 不丢失；Ctrl+Z 不应产生额外历史步（无意义回滚）。
+      1) 未变换切换选区
+         步骤: paint 画一块 -> 框选 -> 不拖动 -> 点击外部新建选区。
+         预期: 原像素不丢失（旧选区可按需回填）；不新增无意义 undo 点。
 
-  2. 变换后切换选区
+      2) 变换后切换选区
+         步骤: 框选 -> 移动/缩放一次 -> 点击外部新建选区。
+         预期: 旧选区结果保留在新位置；不会回填到初始剪切位置；仅新增一次有效 history。
 
-  - 步骤：框选 -> 拖动/缩放 -> 点外部新建选区。
-  - 预期：旧选区变换结果保留到 paint；Ctrl+Z 一次能回到变换前状态。
+      3) 失败回滚后停用工具（关键链路）
+         步骤: 从 paint 创建选区 -> 移动 -> 点击空白触发无效新选区并恢复旧选区 -> 立即停用 Transform。
+         预期: 不回填到最初创建选区位置；paint 仅保留已提交结果；undo 行为稳定。
 
-  3. 新选区失败回滚
+      4) 无变换失败回滚
+         步骤: 从 paint 创建选区但不拖动 -> 点击空白触发失败回滚 -> 停用 Transform。
+         预期: 允许把初始剪切内容回填到原位（等价取消）；不新增 history。
 
-  - 步骤：已有有效旧选区后，点空白区域做无效小选区（触发失败）。
-  - 预期：恢复旧选区编辑态；paint 不重复叠加、不丢像素；继续拖动可正常提交。
-
-  4. 连续多次变换后一次清选
-
-  - 步骤：同一选区连续拖 2-3 次（不切换），最后 Esc/切换工具触发 clearSelection。
-  - 预期：只新增 1 条 history（本次选区会话一次提交）；Ctrl+Z 回退行为稳定。
- */
+      5) 同一选区多次拖动后一次清选
+         步骤: 同一选区连续拖动 2-3 次 -> Esc/切换工具清选。
+         预期: clearSelection 前会先提交 pendingTransform；整个会话只落一次 history。
+    */
 }
 
 /**
@@ -418,6 +421,9 @@ function finalizeSelection() {
         sourceCanvas: createSourceCanvas(sourceData),
         // true 表示该选区创建时对 paint 层做过剪切；后续 clearSelection 可能需要回填。
         cutFromPaint,
+        // true 表示该选区至少一次把变换结果提交到 paint 层。
+        // 该状态用于防止 history 落盘后 dirty 被清零时误触发“初始位置回填”。
+        hasAppliedTransform: false,
         // true 表示该选区已对 paint 做过“有效提交”；仅该标记为 true 时允许落一次 history。
         paintDirtySinceLastSave: false,
         pendingTransform: false
@@ -703,8 +709,11 @@ function applyTransform() {
     paintCtx.globalAlpha = 1;
 
     // 记录：该选区已对 paint 产生有效提交
+    selection.hasAppliedTransform = true;
     selection.pendingTransform = false;
     selection.paintDirtySinceLastSave = true;
+    // 本次提交已经“结算”了初始剪切，不允许后续 clearSelection 再回填到初始位置。
+    selection.cutFromPaint = false;
 }
 
 // === Rendering ===
@@ -835,7 +844,12 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
         // 当没有进行移动/变换时，applyTransform没有触发，这里应该把内容还给 paint 层，避免内容丢失
         // 如果选区从 base 层创建，paint 层一直是空，不需要还原
         // 回填仅用于撤销“进入选区时的剪切”，属于 no-op 还原，不应计入 history。
-        if (restorePixels && selection.cutFromPaint && !selection.paintDirtySinceLastSave) {
+        if (
+            restorePixels &&
+            selection.cutFromPaint &&
+            !selection.hasAppliedTransform &&
+            !selection.paintDirtySinceLastSave
+        ) {
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
                 const paintCtx = paintCanvas.getContext('2d');
