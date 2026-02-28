@@ -528,6 +528,22 @@ function releaseSelectionResources(selection) {
 }
 
 /**
+ * 将未提交的 paint 选区内容回写到 paint 层。
+ * 仅处理 "从 paint 剪切但未发生变换" 的场景，避免切换新选区时内容丢失。
+ */
+function restoreUntransformedPaintSelection(selection) {
+    if (!selection || selection.sourceLayer !== 'paint' || selection.hasTransformed || !selection.sourceCanvas) {
+        return;
+    }
+
+    const paintCanvas = getSharedPaintCanvas();
+    if (!paintCanvas) return;
+
+    const paintCtx = paintCanvas.getContext('2d');
+    paintCtx.drawImage(selection.sourceCanvas, selection.rect.x, selection.rect.y);
+}
+
+/**
  * 清除 paint 层指定区域
  */
 function clearPaintRect(rect) {
@@ -1226,7 +1242,8 @@ function finalizeSelection() {
     transformToolState.stage = 'transforming';
     selectionStart = null;
 
-    // 清空保存的旧选区（新选区已创建成功，不需要再恢复旧选区）
+    // 新选区创建成功：先提交旧选区（若存在未提交的 paint 剪切），再释放资源
+    restoreUntransformedPaintSelection(transformToolState.previousSelection);
     releaseSelectionResources(transformToolState.previousSelection);
     transformToolState.previousSelection = null;
     transformToolState.previousTransform = null;
