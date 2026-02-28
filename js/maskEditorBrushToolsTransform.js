@@ -532,7 +532,7 @@ function releaseSelectionResources(selection) {
  * 仅处理 "从 paint 剪切但未发生变换" 的场景，避免切换新选区时内容丢失。
  */
 function restoreUntransformedPaintSelection(selection) {
-    if (!selection || selection.sourceLayer !== 'paint' || selection.hasTransformed || !selection.sourceCanvas) {
+    if (!selection || !selection.cutFromPaint || selection.hasTransformed || !selection.sourceCanvas) {
         return;
     }
 
@@ -1051,6 +1051,8 @@ function onTransformPointerDown(e) {
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
         transformToolState.previousSelection = transformToolState.selection;
         transformToolState.previousTransform = transformToolState.transform;
+        // 这里允许 clearSelection 内部按 dirty 标记落盘（若此前有实际变换提交），
+        // 但禁止回填像素，并保留资源供后续失败回滚。
         clearSelection(false, true); // 不还原像素，并保留资源用于回滚
         transformToolState.stage = 'selecting';
         startSelection(pos);
@@ -1068,6 +1070,27 @@ function onTransformPointerDown(e) {
         transformToolState.stage = 'selecting';
         startSelection(pos);
     }
+/*
+  1. 未变换切换选区
+
+  - 步骤：在 paint 画一块 -> Transform 框选 -> 不拖动，直接点外部新建选区。
+  - 预期：原 paint 不丢失；Ctrl+Z 不应产生额外历史步（无意义回滚）。
+
+  2. 变换后切换选区
+
+  - 步骤：框选 -> 拖动/缩放 -> 点外部新建选区。
+  - 预期：旧选区变换结果保留到 paint；Ctrl+Z 一次能回到变换前状态。
+
+  3. 新选区失败回滚
+
+  - 步骤：已有有效旧选区后，点空白区域做无效小选区（触发失败）。
+  - 预期：恢复旧选区编辑态；paint 不重复叠加、不丢像素；继续拖动可正常提交。
+
+  4. 连续多次变换后一次清选
+
+  - 步骤：同一选区连续拖 2-3 次（不切换），最后 Esc/切换工具触发 clearSelection。
+  - 预期：只新增 1 条 history（本次选区会话一次提交）；Ctrl+Z 回退行为稳定。
+ */
 }
 
 /**
@@ -1246,13 +1269,18 @@ function finalizeSelection() {
         rect: rect,
         sourceCanvas: createSourceCanvas(sourceData),
         sourceLayer: sourceLayer,
+        // true 表示该选区创建时对 paint 层做过剪切；后续 clearSelection 可能需要回填。
+        cutFromPaint: sourceLayer === 'paint',
+        // true 表示该选区已对 paint 做过“有效提交”；仅该标记为 true 时允许落一次 history。
+        paintDirtySinceLastSave: false,
         lastAppliedBounds: null,
         paintSnapshot: null,
         hasTransformed: false,
         pendingTransform: false
     };
 
-    // 剪切：仅当源来自 paint 层时，才从 paint 层清除选区像素
+    // 剪切：仅当源来自 paint 层时，才从 paint 层清除选区像素。
+    // 注意：这一步是“进入浮动选区编辑态”，不是最终提交，不写 history。
     if (sourceLayer === 'paint') {
         if (useMaskClear) {
             clearPaintByMask(rect, sourceData);
@@ -1488,6 +1516,9 @@ function endDrag() {
         // 延迟提交：拖动结束只更新预览，不立即写入 paint 层
         if (transformToolState.selection) {
             transformToolState.selection.pendingTransform = true;
+            // 几何变化意味着后续 applyTransform 会实际改动 paint，
+            // 因此提前打脏标，确保 clearSelection 时只落一次 history。
+            transformToolState.selection.paintDirtySinceLastSave = true;
         }
     }
 
@@ -1556,6 +1587,7 @@ function applyTransform() {
     selection.lastAppliedBounds = bounds;
     selection.hasTransformed = true;
     selection.pendingTransform = false;
+    selection.paintDirtySinceLastSave = true;
 }
 
 // === Rendering ===
@@ -1688,7 +1720,8 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
         // 如果选区从 paint 层创建，一开始会剪切 paint 层内容（从而实现后续的移动/变换）
         // 当没有进行移动/变换时，applyTransform没有触发，这里应该把内容还给 paint 层，避免内容丢失
         // 如果选区从 base 层创建，paint 层一直是空，不需要还原
-        if (restorePixels && !selection.hasTransformed && selection.sourceLayer === 'paint') {
+        // 回填仅用于撤销“进入选区时的剪切”，属于 no-op 还原，不应计入 history。
+        if (restorePixels && !selection.hasTransformed && selection.cutFromPaint) {
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
                 const paintCtx = paintCanvas.getContext('2d');
@@ -1697,10 +1730,12 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
             }
         }
 
-        // 如果仅仅是还原剪切内容，不需要保存历史
-        if (selection.hasTransformed) {
+        // 统一 history 策略：
+        // 仅在 paint 已发生“有效提交”时保存一次；纯剪切/回填不保存。
+        if (selection.paintDirtySinceLastSave) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
             console.log('Saved state clearSelection');
+            selection.paintDirtySinceLastSave = false;
         }
 
         if (!preserveSelectionResources) {
