@@ -33,12 +33,12 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Outer circle -->
-            <circle cx="16" cy="16" r="10" fill="none" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="10" fill="none" stroke="#4a9eff" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Cross lines -->
-            <line x1="16" y1="4" x2="16" y2="12" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
-            <line x1="16" y1="20" x2="16" y2="28" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
-            <line x1="4" y1="16" x2="12" y2="16" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
-            <line x1="20" y1="16" x2="28" y2="16" stroke="#4a9eff" stroke-width="1.5" filter="url(#shadow)"/>
+            <line x1="16" y1="4" x2="16" y2="12" stroke="#4a9eff" stroke-width="1.3" filter="url(#shadow)"/>
+            <line x1="16" y1="20" x2="16" y2="28" stroke="#4a9eff" stroke-width="1.3" filter="url(#shadow)"/>
+            <line x1="4" y1="16" x2="12" y2="16" stroke="#4a9eff" stroke-width="1.3" filter="url(#shadow)"/>
+            <line x1="20" y1="16" x2="28" y2="16" stroke="#4a9eff" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Center dot -->
             <circle cx="16" cy="16" r="1.5" fill="#4a9eff" filter="url(#shadow)"/>
         </svg>
@@ -74,9 +74,9 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Background circle -->
-            <circle cx="16" cy="16" r="12" fill="rgba(255, 180, 60, 0.2)" stroke="#ffb43c" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="12" fill="rgba(255, 180, 60, 0.2)" stroke="#ffb43c" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Diagonal arrow (top-left to bottom-right) -->
-            <line x1="8" y1="8" x2="24" y2="24" stroke="#ffb43c" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <line x1="8" y1="8" x2="24" y2="24" stroke="#ffb43c" stroke-width="2.1" stroke-linecap="round" filter="url(#shadow)"/>
             <polygon points="6,14 6,6 14,6" fill="#ffb43c" filter="url(#shadow)"/>
             <polygon points="26,18 26,26 18,26" fill="#ffb43c" filter="url(#shadow)"/>
         </svg>
@@ -91,9 +91,9 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Background circle -->
-            <circle cx="16" cy="16" r="12" fill="rgba(255, 180, 60, 0.2)" stroke="#ffb43c" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="12" fill="rgba(255, 180, 60, 0.2)" stroke="#ffb43c" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Diagonal arrow (top-right to bottom-left) -->
-            <line x1="24" y1="8" x2="8" y2="24" stroke="#ffb43c" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <line x1="24" y1="8" x2="8" y2="24" stroke="#ffb43c" stroke-width="2.1" stroke-linecap="round" filter="url(#shadow)"/>
             <polygon points="26,14 26,6 18,6" fill="#ffb43c" filter="url(#shadow)"/>
             <polygon points="6,18 6,26 14,26" fill="#ffb43c" filter="url(#shadow)"/>
         </svg>
@@ -108,9 +108,9 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Background circle -->
-            <circle cx="16" cy="16" r="12" fill="rgba(100, 220, 120, 0.2)" stroke="#64dc78" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="12" fill="rgba(100, 220, 120, 0.2)" stroke="#64dc78" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Vertical arrows -->
-            <line x1="16" y1="6" x2="16" y2="26" stroke="#64dc78" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <line x1="16" y1="6" x2="16" y2="26" stroke="#64dc78" stroke-width="2.1" stroke-linecap="round" filter="url(#shadow)"/>
             <polygon points="16,4 11,10 21,10" fill="#64dc78" filter="url(#shadow)"/>
             <polygon points="16,28 11,22 21,22" fill="#64dc78" filter="url(#shadow)"/>
         </svg>
@@ -125,9 +125,9 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Background circle -->
-            <circle cx="16" cy="16" r="12" fill="rgba(100, 220, 120, 0.2)" stroke="#64dc78" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="12" fill="rgba(100, 220, 120, 0.2)" stroke="#64dc78" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Horizontal arrows -->
-            <line x1="6" y1="16" x2="26" y2="16" stroke="#64dc78" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <line x1="6" y1="16" x2="26" y2="16" stroke="#64dc78" stroke-width="2.1" stroke-linecap="round" filter="url(#shadow)"/>
             <polygon points="4,16 10,11 10,21" fill="#64dc78" filter="url(#shadow)"/>
             <polygon points="28,16 22,11 22,21" fill="#64dc78" filter="url(#shadow)"/>
         </svg>
@@ -142,9 +142,9 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Background circle -->
-            <circle cx="16" cy="16" r="12" fill="rgba(255, 100, 180, 0.2)" stroke="#ff64b4" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="12" fill="rgba(255, 100, 180, 0.2)" stroke="#ff64b4" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- Rotation arrow arc -->
-            <path d="M 10,16 A 6,6 0 1,1 22,16" fill="none" stroke="#ff64b4" stroke-width="2.5" stroke-linecap="round" filter="url(#shadow)"/>
+            <path d="M 10,16 A 6,6 0 1,1 22,16" fill="none" stroke="#ff64b4" stroke-width="2.1" stroke-linecap="round" filter="url(#shadow)"/>
             <!-- Arrow head -->
             <polygon points="22,12 26,18 18,18" fill="#ff64b4" filter="url(#shadow)"/>
             <!-- Center dot -->
@@ -161,9 +161,9 @@ const cursorIcons = {
                 </filter>
             </defs>
             <!-- Filled background circle -->
-            <circle cx="16" cy="16" r="12" fill="#ff64b4" stroke="#ff64b4" stroke-width="1.5" filter="url(#shadow)"/>
+            <circle cx="16" cy="16" r="12" fill="#ff64b4" stroke="#ff64b4" stroke-width="1.3" filter="url(#shadow)"/>
             <!-- White arc -->
-            <path d="M 10,16 A 6,6 0 1,1 22,16" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M 10,16 A 6,6 0 1,1 22,16" fill="none" stroke="white" stroke-width="2.1" stroke-linecap="round"/>
             <!-- White arrow head -->
             <polygon points="22,12 26,18 18,18" fill="white"/>
             <!-- Center dot -->

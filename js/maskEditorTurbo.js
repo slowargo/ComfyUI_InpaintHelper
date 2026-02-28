@@ -399,7 +399,7 @@ function activateAndShowPaintLayer() {
         paintCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    console.log("[slowargo.js] Alt+click eraser: activated paint layer");
+    // console.log("[slowargo.js] Alt+click eraser: activated paint layer");
 }
 
 /**
