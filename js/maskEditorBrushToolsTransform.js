@@ -6,7 +6,7 @@ let sharedBaseCanvas = null;
 let sharedPaintCanvas = null;
 
 /**
- * 设置共享的 overlay 画布（当 overlay 重新创建时调用）
+ * 设置与其他 brush 共享的 overlay 画布（当 overlay 重新创建时调用）
  */
 function setSharedOverlay(overlay) {
     sharedOverlay = overlay;
@@ -299,13 +299,13 @@ function showCustomCursor(show) {
 
 // === Transform Tool State ===
 const transformToolState = {
-    // 当前阶段
+    // 当前阶段。idle 为初始状态。
     stage: 'idle', // 'idle' | 'selecting' | 'transforming'
 
     // 选区数据（仅在 selecting/transforming 时存在）
     selection: null,
 
-    // 变换状态（仅在 transforming 时存在）
+    // 变换状态（corner 等。仅在 transforming 时存在）
     transform: null,
 
     // 拖动状态
@@ -1033,6 +1033,8 @@ function onTransformPointerDown(e) {
     const pos = displayToCanvas(overlay, e.clientX, e.clientY);
 
     if (transformToolState.stage === 'transforming') {
+        // transforming -> selecting, 提交变换
+
         // 检测句柄
         const handle = detectHandle(pos, transformToolState.transform);
         if (handle) {
@@ -1049,16 +1051,21 @@ function onTransformPointerDown(e) {
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
         transformToolState.previousSelection = transformToolState.selection;
         transformToolState.previousTransform = transformToolState.transform;
-        clearSelection(false);  // false: 不还原像素
+        // clearSelection(false);  // false: 不还原像素 (写回 paint）
+        clearSelection();
         transformToolState.stage = 'selecting';
         startSelection(pos);
     } else if (transformToolState.stage === 'selecting') {
+        // selecting -> selecting
+
         // 如果正在框选中（已按下未松开），继续；否则开始新框选
+        // 正常情况下应该不会走到这里。（鼠标左键按下触发选框，之后按下右键就会再次触发PointerDown走到这)
         if (!selectionStart) {
             startSelection(pos);
         }
     } else if (transformToolState.stage === 'idle') {
-        // 从 idle 进入 selecting
+        // idle -> selecting 工具激活后开始绘制选区
+
         transformToolState.stage = 'selecting';
         startSelection(pos);
     }
@@ -1691,8 +1698,10 @@ function clearSelection(restorePixels = true) {
             applyTransform();
         }
 
+        // 如果选区从 paint 层创建，一开始会剪切 paint 层内容（从而实现后续的移动/变换）
+        // 当没有进行移动/变换时，applyTransform没有触发，这里应该把内容还给 paint 层，避免内容丢失
+        // 如果选区从 base 层创建，paint 层一直是空，不需要还原
         if (restorePixels && !selection.hasTransformed && selection.sourceLayer === 'paint') {
-            // 仅在该选区确实从 paint 层执行过剪切时，才需要还原像素
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
                 const paintCtx = paintCanvas.getContext('2d');
@@ -1701,7 +1710,7 @@ function clearSelection(restorePixels = true) {
             }
         }
 
-        // 历史保存策略：仅在 clearSelection 时保存一次
+        // 如果仅仅是还原剪切内容，不需要保存历史
         if (selection.hasTransformed) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
             console.log('Saved state clearSelection');
