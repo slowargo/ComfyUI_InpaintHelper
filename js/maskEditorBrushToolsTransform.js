@@ -1156,33 +1156,63 @@ function normalizeRect(start, end) {
 }
 
 /**
+ * 将浮点矩形对齐到 canvas 像素网格，并裁剪到画布范围内
+ */
+function snapRectToCanvasPixels(rect, canvasWidth, canvasHeight) {
+    const left = Math.max(0, Math.floor(rect.x));
+    const top = Math.max(0, Math.floor(rect.y));
+    const right = Math.min(canvasWidth, Math.ceil(rect.x + rect.width));
+    const bottom = Math.min(canvasHeight, Math.ceil(rect.y + rect.height));
+    return {
+        x: left,
+        y: top,
+        width: Math.max(0, right - left),
+        height: Math.max(0, bottom - top)
+    };
+}
+
+/**
  * 完成框选
  */
 function finalizeSelection() {
     if (!selectionStart) return;
 
+    const paintCanvas = getSharedPaintCanvas();
+    const baseCanvas = getSharedBaseCanvas();
+    const canvasWidth = paintCanvas?.width || baseCanvas?.width || 0;
+    const canvasHeight = paintCanvas?.height || baseCanvas?.height || 0;
+
     const currentPos = transformToolState.lastMousePos || selectionStart;
-    let rect = normalizeRect(selectionStart, currentPos);
+    const rawRect = normalizeRect(selectionStart, currentPos);
+    let rect = snapRectToCanvasPixels(rawRect, canvasWidth, canvasHeight);
     let sourceData = null;
     let sourceLayer = 'paint'; // 'paint' | 'base'
     let useMaskClear = false;
 
     // 过滤过小的选区
-    if (rect.width < 5 || rect.height < 5) {
+    if (rawRect.width < 5 || rawRect.height < 5) {
         // 小框选优先尝试自动识别 paint 连通对象（点击选对象）
-        const autoSelection = autoSelectPaintObjectFromTinyRect(rect);
+        const autoSelection = autoSelectPaintObjectFromTinyRect(rawRect);
         if (!autoSelection) {
             restorePreviousSelection();
             return;
         }
 
-        rect = autoSelection.rect;
+        rect = snapRectToCanvasPixels(autoSelection.rect, canvasWidth, canvasHeight);
+        if (rect.width <= 0 || rect.height <= 0) {
+            restorePreviousSelection();
+            return;
+        }
         sourceData = autoSelection.imageData;
         sourceLayer = 'paint';
         useMaskClear = true;
     }
 
     if (!sourceData) {
+        if (rect.width <= 0 || rect.height <= 0) {
+            restorePreviousSelection();
+            return;
+        }
         // 检测选区内容
         const paintData = samplePaintLayer(rect);
         const minPixels = Math.max(16, Math.floor(rect.width * rect.height * 0.005));
