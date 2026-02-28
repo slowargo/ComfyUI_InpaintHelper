@@ -180,3 +180,6 @@ The mask editor integrates with ComfyUI_frontend's GPU-based rendering. When rel
 - Fast Forward Mode monitors `execution_success`, `execution_error`, `execution_interrupted` events
 - Mask editor opening detected via `MutationObserver` on document.body
 - Timeout protection for execution monitoring (120 seconds default)
+
+### Others
+- 前端代码位置在../ComfyUI_frontend

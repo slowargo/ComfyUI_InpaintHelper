@@ -1148,6 +1148,7 @@ function finalizeSelection() {
     const currentPos = transformToolState.lastMousePos || selectionStart;
     let rect = normalizeRect(selectionStart, currentPos);
     let sourceData = null;
+    let sourceLayer = 'paint'; // 'paint' | 'base'
     let useMaskClear = false;
 
     // 过滤过小的选区
@@ -1161,6 +1162,7 @@ function finalizeSelection() {
 
         rect = autoSelection.rect;
         sourceData = autoSelection.imageData;
+        sourceLayer = 'paint';
         useMaskClear = true;
     }
 
@@ -1171,6 +1173,7 @@ function finalizeSelection() {
         const isEmpty = isImageDataEmpty(paintData, minPixels);
 
         sourceData = paintData;
+        sourceLayer = 'paint';
         // paint 层为空时，使用 base 层内容作为变换源
         if (isEmpty) {
             // 从 base 层检测选区内容
@@ -1183,23 +1186,27 @@ function finalizeSelection() {
                 return;
             }
             sourceData = baseData;
+            sourceLayer = 'base';
         }
     }
 
     transformToolState.selection = {
         rect: rect,
         sourceCanvas: createSourceCanvas(sourceData),
+        sourceLayer: sourceLayer,
         lastAppliedBounds: null,
         paintSnapshot: null,
         hasTransformed: false,
         pendingTransform: false
     };
 
-    // 剪切：从 paint 层清除选区像素
-    if (useMaskClear) {
-        clearPaintByMask(rect, sourceData);
-    } else {
-        clearPaintRect(rect);
+    // 剪切：仅当源来自 paint 层时，才从 paint 层清除选区像素
+    if (sourceLayer === 'paint') {
+        if (useMaskClear) {
+            clearPaintByMask(rect, sourceData);
+        } else {
+            clearPaintRect(rect);
+        }
     }
 
     // 初始化变换状态
@@ -1637,8 +1644,8 @@ function clearSelection(restorePixels = true) {
             applyTransform();
         }
 
-        if (restorePixels && !selection.hasTransformed) {
-            // 框选后，paint 层原来的内容已经被剪切掉了。如果用户框选后未做任何变换就放弃，还原像素到 paint 层原位
+        if (restorePixels && !selection.hasTransformed && selection.sourceLayer === 'paint') {
+            // 仅在该选区确实从 paint 层执行过剪切时，才需要还原像素
             const paintCanvas = getSharedPaintCanvas();
             if (paintCanvas) {
                 const paintCtx = paintCanvas.getContext('2d');
