@@ -1051,8 +1051,7 @@ function onTransformPointerDown(e) {
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
         transformToolState.previousSelection = transformToolState.selection;
         transformToolState.previousTransform = transformToolState.transform;
-        // clearSelection(false);  // false: 不还原像素 (写回 paint）
-        clearSelection();
+        clearSelection(false, true); // 不还原像素，并保留资源用于回滚
         transformToolState.stage = 'selecting';
         startSelection(pos);
     } else if (transformToolState.stage === 'selecting') {
@@ -1279,7 +1278,7 @@ function finalizeSelection() {
     transformToolState.stage = 'transforming';
     selectionStart = null;
 
-    // 新选区创建成功：先提交旧选区（若存在未提交的 paint 剪切），再释放资源
+    // 新选区创建成功：提交/释放旧选区
     restoreUntransformedPaintSelection(transformToolState.previousSelection);
     releaseSelectionResources(transformToolState.previousSelection);
     transformToolState.previousSelection = null;
@@ -1320,21 +1319,8 @@ function restorePreviousSelection() {
         transformToolState.selection = transformToolState.previousSelection;
         transformToolState.transform = transformToolState.previousTransform;
         transformToolState.stage = 'transforming';
-
-        // 将旧选区像素还原到 paint 层（因为创建选区时清除了）
-        // const paintCanvas = getSharedPaintCanvas();
-        // if (paintCanvas && transformToolState.selection.sourceCanvas) {
-        //     const paintCtx = paintCanvas.getContext('2d');
-        //     paintCtx.drawImage(
-        //         transformToolState.selection.sourceCanvas,
-        //         transformToolState.selection.rect.x,
-        //         transformToolState.selection.rect.y
-        //     );
-        // }
-
         // 重绘
         renderTransforming();
-
         showToast('New selection invalid, restored previous selection', { duration: 2000 });
     } else {
         transformToolState.stage = 'idle';
@@ -1687,9 +1673,10 @@ function drawHandles(ctx, corners) {
 
 /**
  * 清除选区
- * @param {boolean} restorePixels - 是否在未变换时还原像素到 paint 层（默认 true）
+ * @param {boolean} restorePixels - 是否在未变换时还原剪切自 paint 层的像素到 paint 层（默认 true）
+ * @param {boolean} preserveSelectionResources - 是否保留选区资源供失败回滚（默认 false）
  */
-function clearSelection(restorePixels = true) {
+function clearSelection(restorePixels = true, preserveSelectionResources = false) {
     const { selection } = transformToolState;
 
     if (selection) {
@@ -1714,6 +1701,10 @@ function clearSelection(restorePixels = true) {
         if (selection.hasTransformed) {
             getMaskEditorStore()?.canvasHistory?.saveState?.();
             console.log('Saved state clearSelection');
+        }
+
+        if (!preserveSelectionResources) {
+            releaseSelectionResources(selection);
         }
     }
 
@@ -1746,7 +1737,6 @@ function clearSelection(restorePixels = true) {
  * 清理 Transform 工具
  */
 function cleanupTransform() {
-    const selectionToDispose = transformToolState.selection;
     const previousSelectionToDispose = transformToolState.previousSelection;
 
     // 取消待执行的预览渲染
@@ -1754,8 +1744,7 @@ function cleanupTransform() {
 
     // 清除选区（保留已应用的变换）
     clearSelection();
-    releaseSelectionResources(selectionToDispose);
-    if (previousSelectionToDispose && previousSelectionToDispose !== selectionToDispose) {
+    if (previousSelectionToDispose) {
         releaseSelectionResources(previousSelectionToDispose);
     }
 
