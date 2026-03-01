@@ -51,3 +51,11 @@ For PRs, include:
 
 ## Any other things
 - 前端代码位置在../ComfyUI_frontend
+- commig message 应基于实际要提交的改动生成而不仅仅是最近对话的改动，主讯息应该用英文，附加讯息可以是中文。风格可参考之前的 commit message
+
+## Lessons Learned (Mask Editor / Transform)
+- Canvas 2D context state is sticky. `globalCompositeOperation` can leak from eraser (`destination-out`) into later `drawImage` calls. For transform apply/restore paths, always wrap draw with `ctx.save()` + `ctx.globalCompositeOperation = 'source-over'` + `ctx.restore()`.
+- Transform regressions must include cross-tool chains, not only single-tool paths. At minimum cover: `paint -> transform move -> deactivate`, `paint -> transform -> invalid new selection rollback -> deactivate`, and `transform -> erase -> transform -> deactivate`.
+- If user does not allow changes in `../ComfyUI_frontend`, implement mitigation in this extension layer first (event guard/state isolation), and avoid cross-repo edits.
+- Suspected “mask drawing restores old paint” can come from GPU/history resync races after tool switching. In extension layer, a short one-shot pointer guard after deactivating custom tools is an acceptable mitigation.
+- When patching files with mixed line endings, verify diff scope (`git diff`) to avoid accidental whole-file churn.

@@ -12,6 +12,7 @@ import {
     createTransformButton,
     handleBrushToolKeydown,
     handleBrushToolKeyup,
+    isAnyCustomToolActive,
     initCloneToolEvents,
     initSmudgeToolEvents,
     cleanupAllBrushTools,
@@ -690,6 +691,14 @@ export function initFastForwardMode() {
     let eraserToolEl = null;
     let eraserAltClickHandler = null;
     let toolPanelHandler = null;
+    let canvasPointerGuardHandler = null;
+    let canvasPointerGuardUntil = 0;
+    const CANVAS_POINTER_GUARD_MS = 120;
+
+    function armCanvasPointerGuard() {
+        // “短时间首击保护”：从自定义工具切回左侧原生工具后，给画布一个很短的 pointerdown 保护窗口，防止 GPU/历史同步未完成时首笔把旧 paint 回写。
+        canvasPointerGuardUntil = performance.now() + CANVAS_POINTER_GUARD_MS;
+    }
 
     // Note: Keyboard events are bound/unbound dynamically in onEditorReady and cleanup
 
@@ -723,6 +732,24 @@ export function initFastForwardMode() {
         window.addEventListener('keydown', onMaskEditorKeydown, true);
         window.addEventListener('keyup', onMaskEditorKeyup, true);
 
+        // Guard the first native canvas pointerdown right after custom-tool deactivation.
+        // This mitigates occasional GPU/canvas history resync races that can revive stale paint pixels.
+        if (!canvasPointerGuardHandler) {
+            canvasPointerGuardHandler = (e) => {
+                if (performance.now() > canvasPointerGuardUntil) return;
+                if (e.button !== 0) return;
+                if (isAnyCustomToolActive()) return;
+
+                const container = document.querySelector("#maskEditorCanvasContainer");
+                if (!container || !container.contains(e.target)) return;
+
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                canvasPointerGuardUntil = 0;
+            };
+            document.addEventListener('pointerdown', canvasPointerGuardHandler, true);
+        }
+
         // Add click listener to toggle blur state when clicking on blurred editor
         if (!dialog.dataset.blurListenerAdded) {
             dialogClickHandler = (e) => {
@@ -742,8 +769,12 @@ export function initFastForwardMode() {
         const toolPanel = dialog.querySelector('.maskEditor_toolPanelContainer')?.parentElement;
         if (toolPanel) {
             toolPanelHandler = (e) => {
+                const wasCustomToolActive = isAnyCustomToolActive();
                 deactivateAllCustomTools();
                 brushToolOverlay?.classList.remove('active');
+                if (wasCustomToolActive) {
+                    armCanvasPointerGuard();
+                }
             };
             toolPanel.addEventListener('click', toolPanelHandler);
         }
@@ -799,6 +830,12 @@ export function initFastForwardMode() {
             toolPanel?.removeEventListener('click', toolPanelHandler);
             toolPanelHandler = null;
         }
+
+        if (canvasPointerGuardHandler) {
+            document.removeEventListener('pointerdown', canvasPointerGuardHandler, true);
+            canvasPointerGuardHandler = null;
+        }
+        canvasPointerGuardUntil = 0;
 
         // Cleanup UI elements
         cleanupFastForwardUI(currentDialog);
