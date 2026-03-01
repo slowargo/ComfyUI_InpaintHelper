@@ -60,7 +60,12 @@ function restoreUntransformedPaintSelection(selection) {
     if (!paintCanvas) return;
 
     const paintCtx = paintCanvas.getContext("2d");
+    // Eraser may leave destination-out on context; force normal compositing for restore.
+    paintCtx.save();
+    paintCtx.globalCompositeOperation = "source-over";
+    paintCtx.globalAlpha = 1;
     paintCtx.drawImage(selection.sourceCanvas, selection.rect.x, selection.rect.y);
+    paintCtx.restore();
 }
 
 /**

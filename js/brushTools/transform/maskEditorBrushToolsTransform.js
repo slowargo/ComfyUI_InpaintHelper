@@ -269,6 +269,12 @@ function onTransformPointerDown(e) {
       5) 同一选区多次拖动后一次清选
          步骤: 同一选区连续拖动 2-3 次 -> Esc/切换工具清选。
          预期: clearSelection 前会先提交 pendingTransform；整个会话只落一次 history。
+
+      6) Erase 介入后再次 Transform 提交（destination-out 残留防护）
+         步骤: 从 paint 创建选区 -> 移动 -> 退出 Transform -> 用 erase 做任意擦除 ->
+              重新激活 Transform 并创建新选区 -> 移动 -> 停用 Transform。
+         预期: 停用时会把当前选区正常绘制到 paint（source-over），
+              不会因残留 destination-out 导致“未绘制/被擦除”。
     */
 }
 
@@ -704,9 +710,12 @@ function applyTransform() {
 
     // 合成到 paint 层（应用 brush opacity）
     const opacity = getBrushOpacity();
+    // Eraser may leave destination-out on context; force normal compositing for transform apply.
+    paintCtx.save();
+    paintCtx.globalCompositeOperation = 'source-over';
     paintCtx.globalAlpha = opacity;
     paintCtx.drawImage(reusableTransformCanvas, bounds.x, bounds.y);
-    paintCtx.globalAlpha = 1;
+    paintCtx.restore();
 
     // 记录：该选区已对 paint 产生有效提交
     selection.hasAppliedTransform = true;
@@ -850,12 +859,7 @@ function clearSelection(restorePixels = true, preserveSelectionResources = false
             !selection.hasAppliedTransform &&
             !selection.paintDirtySinceLastSave
         ) {
-            const paintCanvas = getSharedPaintCanvas();
-            if (paintCanvas) {
-                const paintCtx = paintCanvas.getContext('2d');
-                paintCtx.drawImage(selection.sourceCanvas,
-                    selection.rect.x, selection.rect.y);
-            }
+            restoreUntransformedPaintSelection(selection);
         }
 
         // 统一 history 策略：
