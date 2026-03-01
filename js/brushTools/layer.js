@@ -41,7 +41,7 @@ function sampleComposite(baseCanvas, paintCanvas, centerX, centerY, radius) {
 
 /**
  * Stamp a single clone brush dab at (drawX, drawY).
- * Copies pixels from the base canvas source region to the paint canvas destination,
+ * Copies pixels from the composited (paint over base) source region to the paint canvas destination,
  * blending with a Gaussian falloff within the brush radius.
  */
 function stampClone(baseCanvas, paintCanvas, cloneState, drawX, drawY, radius, opacity) {
@@ -66,7 +66,8 @@ function stampClone(baseCanvas, paintCanvas, cloneState, drawX, drawY, radius, o
     const baseCtx = baseCanvas.getContext("2d", { willReadFrequently: true });
     const paintCtx = paintCanvas.getContext("2d", { willReadFrequently: true });
 
-    const srcData = baseCtx.getImageData(srcL, srcT, w, h);
+    const baseData = baseCtx.getImageData(srcL, srcT, w, h);
+    const paintSrcData = paintCtx.getImageData(srcL, srcT, w, h);
     const dstData = paintCtx.getImageData(dstL, dstT, w, h);
 
     for (let py = 0; py < h; py++) {
@@ -78,10 +79,16 @@ function stampClone(baseCanvas, paintCanvas, cloneState, drawX, drawY, radius, o
             const i = (py * w + px) * 4;
 
             // Source pixel (normalized to 0-1)
-            const sR = srcData.data[i];
-            const sG = srcData.data[i + 1];
-            const sB = srcData.data[i + 2];
-            const sA = srcData.data[i + 3] / 255 * weight * opacity; // Apply brush falloff and opacity
+            const pa = paintSrcData.data[i + 3] / 255;
+            const sourceR = paintSrcData.data[i] * pa + baseData.data[i] * (1 - pa);
+            const sourceG = paintSrcData.data[i + 1] * pa + baseData.data[i + 1] * (1 - pa);
+            const sourceB = paintSrcData.data[i + 2] * pa + baseData.data[i + 2] * (1 - pa);
+            const sourceA = Math.max(paintSrcData.data[i + 3], baseData.data[i + 3]) / 255;
+
+            const sR = sourceR;
+            const sG = sourceG;
+            const sB = sourceB;
+            const sA = sourceA * weight * opacity; // Apply brush falloff and opacity
 
             // Destination pixel
             const dR = dstData.data[i];
