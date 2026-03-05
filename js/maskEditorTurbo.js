@@ -31,6 +31,12 @@ const editorState = {
 
     // Editor Blur
     isBlurred: false,       // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
+    /**
+     * Previous base-layer visibility captured at Alt-hold start in eraser mode.
+     * `null` means Alt-hold override is inactive.
+     * @type {boolean|null}
+     */
+    eraserAltBaseWasVisible: null,
 };
 
 // === Color Memory ===
@@ -382,6 +388,20 @@ function cleanupFastForwardUI(dialog) {
 }
 
 /**
+ * Toggle a mask editor layer checkbox and notify Vue via `change`.
+ *
+ * @param {HTMLInputElement | null | undefined} checkbox - Target layer checkbox element.
+ * @param {boolean} checked - Desired checked state.
+ * @returns {void}
+ */
+function setLayerCheckboxChecked(checkbox, checked) {
+    if (!checkbox) return;
+    if (checkbox.checked === checked) return;
+    checkbox.checked = checked;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/**
  * When Alt+clicking the eraser tool, force paint layer as active and visible.
  * Syncs visibility through Vue's own change handler to keep checkbox state consistent.
  */
@@ -395,12 +415,45 @@ function activateAndShowPaintLayer() {
     // Checkbox order in ImageLayerSettingsPanel: [mask, paint, baseImage]
     const checkboxes = document.querySelectorAll('.maskEditor_sidePanelLayerCheckbox');
     const paintCheckbox = checkboxes?.[1];
-    if (paintCheckbox && !paintCheckbox.checked) {
-        paintCheckbox.checked = true;
-        paintCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-    }
+    setLayerCheckboxChecked(paintCheckbox, true);
 
     // console.log("[slowargo.js] Alt+click eraser: activated paint layer");
+}
+
+/**
+ * Start temporary Alt-hold override for eraser tool:
+ * switch active layer to paint and hide base layer, while remembering base visibility.
+ *
+ * @returns {void}
+ */
+function beginEraserAltHoldOverride() {
+    if (editorState.eraserAltBaseWasVisible !== null) return;
+
+    const store = getMaskEditorStore();
+    if (!store || store.currentTool !== 'eraser') return;
+
+    const checkboxes = document.querySelectorAll('.maskEditor_sidePanelLayerCheckbox');
+    const baseCheckbox = checkboxes?.[2];
+    if (!baseCheckbox) return;
+
+    editorState.eraserAltBaseWasVisible = !!baseCheckbox.checked;
+
+    activateAndShowPaintLayer();
+    setLayerCheckboxChecked(baseCheckbox, false);
+}
+
+/**
+ * Restore base-layer visibility after Alt-hold override ends.
+ *
+ * @returns {void}
+ */
+function restoreEraserAltHoldOverride() {
+    if (editorState.eraserAltBaseWasVisible === null) return;
+    const baseWasVisible = editorState.eraserAltBaseWasVisible;
+    editorState.eraserAltBaseWasVisible = null;
+    const checkboxes = document.querySelectorAll('.maskEditor_sidePanelLayerCheckbox');
+    const baseCheckbox = checkboxes?.[2];
+    setLayerCheckboxChecked(baseCheckbox, baseWasVisible);
 }
 
 /**
@@ -547,6 +600,10 @@ function addFastForwardToggleButton() {
 function onMaskEditorKeyup(e) {
     if (!ComfyApp.maskeditor_is_opended()) return;
 
+    if (!e.altKey) {
+        restoreEraserAltHoldOverride();
+    }
+
     // In blur mode, let all keyboard events pass through to main UI
     if (editorState.isBlurred) return;
 
@@ -620,6 +677,10 @@ async function onMaskEditorKeydown(e) {
 
         // Otherwise, let all keyboard events pass through to main UI
     } else {
+        if (e.altKey) {
+            beginEraserAltHoldOverride();
+        }
+
         // focused mode
 
         // My node only. Do nothing for normal node's mask editor
@@ -805,6 +866,8 @@ export function initFastForwardMode() {
     function onEditorClose() {
         initialized = false;
         console.log("[slowargo.js] Mask editor closed, cleaning up resources");
+
+        restoreEraserAltHoldOverride();
 
         // Cleanup all brush tools (clone, smudge, overlay, canvas refs)
         cleanupAllBrushTools();
