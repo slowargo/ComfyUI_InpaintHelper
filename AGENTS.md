@@ -51,7 +51,9 @@ For PRs, include:
 
 ## Any other things
 - 前端代码位置在../ComfyUI_frontend
-- commig message 应基于实际要提交的改动生成而不仅仅是最近对话的改动，主讯息应该用英文，附加讯息可以是中文。风格可参考之前的 commit message
+- commit message 应基于实际要提交的改动生成而不仅仅是最近对话的改动，主讯息应该用英文，附加讯息可以是中文。风格可参考之前的 commit message
+- 功能实现应该尽量简洁易维护，避免过度设计
+- 尽量遵循相似功能的既有实现，保持实现风格统一。如果觉得既有实现可以优化，可提出建议
 
 ## Lessons Learned (Mask Editor / Transform)
 - Canvas 2D context state is sticky. `globalCompositeOperation` can leak from eraser (`destination-out`) into later `drawImage` calls. For transform apply/restore paths, always wrap draw with `ctx.save()` + `ctx.globalCompositeOperation = 'source-over'` + `ctx.restore()`.
