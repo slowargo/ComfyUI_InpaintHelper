@@ -268,7 +268,7 @@ function onCloneMouseDown(e) {
         editorState.cloneBrush.hasSample  = true;
         editorState.cloneBrush.sampleX    = cx;
         editorState.cloneBrush.sampleY    = cy;
-        renderCloneOverlay(cx, cy);
+        renderCloneOverlay(cx, cy, true);
         return;
     }
 
@@ -298,12 +298,13 @@ function onCloneMouseMove(e) {
     }
 
     const { x: cx, y: cy } = displayToCanvas(brushToolOverlay, e.clientX, e.clientY);
+    const isSampling = (e.altKey || !editorState.cloneBrush.hasSample) && !editorState.cloneBrush.isDrawing;
 
     if (editorState.cloneBrush.isDrawing) {
         e.stopImmediatePropagation();
         applyCloneStroke(cx, cy);
     }
-    renderCloneOverlay(cx, cy);
+    renderCloneOverlay(cx, cy, isSampling);
 }
 
 /**
@@ -393,14 +394,23 @@ function applyCloneStroke(cx, cy) {
  * and a brush circle at the cursor.
  * @param {number} mouseX - Current cursor X in canvas pixels
  * @param {number} mouseY - Current cursor Y in canvas pixels
+ * @param {boolean} [isSampling=false] - Whether clone brush is currently in source-sampling state
  */
-function renderCloneOverlay(mouseX, mouseY) {
-    if (!brushToolOverlay || !editorState.cloneBrush.hasSample) return;
+function renderCloneOverlay(mouseX, mouseY, isSampling = false) {
+    if (!brushToolOverlay) return;
 
     const ctx = brushToolOverlay.getContext('2d');
     ctx.clearRect(0, 0, brushToolOverlay.width, brushToolOverlay.height);
 
     const radius = getBrushRadius();
+
+    if (isSampling) {
+        drawCrosshair(ctx, mouseX, mouseY, 'rgba(255, 255, 255, 0.95)', radius);
+        // return;
+    }
+
+    if (!editorState.cloneBrush.hasSample) return;
+
     drawCrosshair(ctx, editorState.cloneBrush.sampleX, editorState.cloneBrush.sampleY, '#ff6666', radius);
 
     if (editorState.cloneBrush.isDrawing) {
