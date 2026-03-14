@@ -15,6 +15,7 @@ import nodes
 import numpy as np
 from server import PromptServer
 import torch
+import torch.nn.functional as F
 import re
 import hashlib
 
@@ -937,6 +938,86 @@ class RememberStrings:
         # logger.info(f"[RememberStrings] file_path:{file_path}")
         return file_path, stored_entries
 
+class ImageSimilaritySSIM:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image_a": ("IMAGE",),
+                "image_b": ("IMAGE",),
+                "threshold": ("FLOAT", {
+                    "default": 0.9,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("FLOAT", "BOOLEAN")
+    RETURN_NAMES = ("similarity", "is_similar")
+    FUNCTION = "compute_similarity"
+    CATEGORY = "Slowargo"
+
+    @staticmethod
+    def _to_grayscale_bchw(image: torch.Tensor) -> torch.Tensor:
+        # IMAGE input is typically [B, H, W, C] with range [0, 1]
+        if image.ndim != 4:
+            raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
+
+        image = image.float()
+        image = image.permute(0, 3, 1, 2)
+        channels = image.shape[1]
+
+        if channels == 3:
+            weights = torch.tensor([0.299, 0.587, 0.114], dtype=image.dtype, device=image.device).view(1, 3, 1, 1)
+            return (image * weights).sum(dim=1, keepdim=True)
+        if channels == 1:
+            return image
+        return image.mean(dim=1, keepdim=True)
+
+    @staticmethod
+    def _ssim_batch(gray_a: torch.Tensor, gray_b: torch.Tensor) -> torch.Tensor:
+        # Global SSIM per image in batch.
+        c1 = 0.01 ** 2
+        c2 = 0.03 ** 2
+        eps = 1e-8
+
+        mu_a = gray_a.mean(dim=(-2, -1), keepdim=True)
+        mu_b = gray_b.mean(dim=(-2, -1), keepdim=True)
+
+        var_a = ((gray_a - mu_a) ** 2).mean(dim=(-2, -1), keepdim=True)
+        var_b = ((gray_b - mu_b) ** 2).mean(dim=(-2, -1), keepdim=True)
+        cov_ab = ((gray_a - mu_a) * (gray_b - mu_b)).mean(dim=(-2, -1), keepdim=True)
+
+        numerator = (2.0 * mu_a * mu_b + c1) * (2.0 * cov_ab + c2)
+        denominator = (mu_a ** 2 + mu_b ** 2 + c1) * (var_a + var_b + c2) + eps
+        ssim = numerator / denominator
+        return ssim.squeeze(-1).squeeze(-1).squeeze(-1).clamp(0.0, 1.0)
+
+    def compute_similarity(self, image_a, image_b, threshold=0.9):
+        if image_a.shape[0] != image_b.shape[0]:
+            raise ValueError(
+                f"Batch size mismatch: image_a batch={image_a.shape[0]}, image_b batch={image_b.shape[0]}"
+            )
+
+        gray_a = self._to_grayscale_bchw(image_a)
+        gray_b = self._to_grayscale_bchw(image_b)
+
+        target_h = min(gray_a.shape[-2], gray_b.shape[-2])
+        target_w = min(gray_a.shape[-1], gray_b.shape[-1])
+
+        if gray_a.shape[-2:] != (target_h, target_w):
+            gray_a = F.interpolate(gray_a, size=(target_h, target_w), mode="bilinear", align_corners=False)
+        if gray_b.shape[-2:] != (target_h, target_w):
+            gray_b = F.interpolate(gray_b, size=(target_h, target_w), mode="bilinear", align_corners=False)
+
+        ssim_values = self._ssim_batch(gray_a, gray_b)
+        similarity = float(ssim_values.mean().item())
+        is_similar = similarity >= float(threshold)
+
+        return (similarity, is_similar)
+
 class RunButtonNode:
     def __init__(self):
         pass
@@ -1142,6 +1223,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadImageFromAnyPath": LoadImageFromAnyPath,
     "LoadRecentImagePlusV1": LoadRecentImagePlusV1,
     "SaveImageToFileName": SaveImageToFileName,
+    "ImageSimilaritySSIM": ImageSimilaritySSIM,
     "ExtractSubFolder": ExtractSubFolder,
     "RememberStrings": RememberStrings,
     "RunButtonNode": RunButtonNode,
@@ -1155,6 +1237,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImageFromAnyPath": "Load Image (from Any Path)",
     "LoadRecentImagePlusV1": "Load Recent Image",
     "SaveImageToFileName": "Save Image to Specified File Name",
+    "ImageSimilaritySSIM": "Image Similarity (SSIM)",
     "ExtractSubFolder": "Extract Sub Folder",
     "RememberStrings": "Remember Recent Strings",
     "RunButtonNode": "Run Button",
