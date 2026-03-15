@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import List, Tuple
 
@@ -407,6 +408,25 @@ class FloatSelector:
                     "max": 999,
                     "step": 1,
                 }),
+                "min_value": ("FLOAT", {
+                    "default": 0.0,
+                    "step": 0.01,
+                    "round": 0.001,
+                    "display": "number",
+                }),
+                "max_value": ("FLOAT", {
+                    "default": 0.9,
+                    "step": 0.01,
+                    "round": 0.001,
+                    "display": "number",
+                }),
+                "step_value": ("FLOAT", {
+                    "default": 0.02,
+                    "min": 0.001,
+                    "step": 0.01,
+                    "round": 0.001,
+                    "display": "number",
+                }),
                 "slot_count": ("INT", {
                     "default": 2,
                     "min": 0,
@@ -439,14 +459,54 @@ class FloatSelector:
 
         return values
 
-    def select_float(self, values_string, selected_index, slot_count):
+    @staticmethod
+    def _get_step_precision(step_value):
+        try:
+            normalized = Decimal(str(step_value)).normalize()
+        except (InvalidOperation, ValueError, TypeError):
+            return 0
+
+        exponent = normalized.as_tuple().exponent
+        return max(0, -exponent)
+
+    @staticmethod
+    def _clamp(value, min_value, max_value):
+        if value < min_value:
+            return min_value
+        if value > max_value:
+            return max_value
+        return value
+
+    @classmethod
+    def _quantize_value(cls, value, min_value, max_value, step_value):
+        lower = float(min(min_value, max_value))
+        upper = float(max(min_value, max_value))
+        numeric_value = cls._clamp(float(value), lower, upper)
+
+        numeric_step = float(step_value) if step_value is not None else 0.0
+        if numeric_step > 0:
+            snapped = round((numeric_value - lower) / numeric_step)
+            numeric_value = lower + snapped * numeric_step
+            numeric_value = cls._clamp(numeric_value, lower, upper)
+
+        precision = cls._get_step_precision(numeric_step)
+        if precision > 0:
+            numeric_value = round(numeric_value, precision)
+
+        return numeric_value
+
+    def select_float(self, values_string, selected_index, slot_count, min_value=0.0, max_value=0.9, step_value=0.02):
+        # Keep frontend-config widgets (`min`/`max`/`step`) in the signature
+        # so ComfyUI can pass required inputs without runtime argument errors.
         values = self._normalize_values(values_string, slot_count)
 
         if not values:
             return (0.0,)
 
         clamped_index = min(max(int(selected_index or 0), 0), len(values) - 1)
-        return (values[clamped_index],)
+        selected_value = values[clamped_index]
+        quantized_value = self._quantize_value(selected_value, min_value, max_value, step_value)
+        return (quantized_value,)
 
 class LoadImageFromOutputPlusV1(nodes.LoadImage):
     @classmethod

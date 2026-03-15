@@ -211,8 +211,15 @@ app.registerExtension({
             };
 
         } else if (nodeType?.comfyClass == "FloatSelector") {
-            const ALERT_OUTLINE_COLOR = "#ffaa00";
-            const ALERT_BG_COLOR = "#554400";
+            const SELECT_ICON_ACTIVE_OUTLINE = "#ffaa00";
+            const SELECT_ICON_ACTIVE_BG = "#554400";
+            const SELECT_ICON_SIZE = 20;
+            const SELECT_ICON_GAP_FROM_WIDGET = 8;
+            const SELECT_ICON_RIGHT_PADDING = 16;
+            const SELECT_ICON_GUTTER_WIDTH =
+                SELECT_ICON_SIZE + SELECT_ICON_GAP_FROM_WIDGET + SELECT_ICON_RIGHT_PADDING;
+            const SELECT_ICON_IDLE_OUTLINE = "#777777";
+            const SELECT_ICON_IDLE_BG = "#2f2f2f";
 
             const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
@@ -221,8 +228,11 @@ app.registerExtension({
                 const valuesWidget = this.widgets?.find(w => w.name === "values_string");
                 const indexWidget = this.widgets?.find(w => w.name === "selected_index");
                 const slotCountWidget = this.widgets?.find(w => w.name === "slot_count");
+                const minWidget = this.widgets?.find(w => w.name === "min_value");
+                const maxWidget = this.widgets?.find(w => w.name === "max_value");
+                const stepWidget = this.widgets?.find(w => w.name === "step_value");
 
-                if (!valuesWidget || !indexWidget || !slotCountWidget) {
+                if (!valuesWidget || !indexWidget || !slotCountWidget || !minWidget || !maxWidget || !stepWidget) {
                     return result;
                 }
 
@@ -239,17 +249,54 @@ app.registerExtension({
                     return Number.isFinite(parsed) ? parsed : 0;
                 };
 
+                const getWidgetFloatValue = (widget, fallbackValue) => {
+                    const parsed = Number.parseFloat(widget?.value);
+                    return Number.isFinite(parsed) ? parsed : fallbackValue;
+                };
+
+                const quantizeValue = (value, minValue, maxValue, stepValue) => {
+                    const lowerBound = Math.min(minValue, maxValue);
+                    const upperBound = Math.max(minValue, maxValue);
+                    const parsedValue = normalizeFloatValue(value);
+                    const clampedValue = Math.min(Math.max(parsedValue, lowerBound), upperBound);
+
+                    if (!Number.isFinite(stepValue) || stepValue <= 0) {
+                        return clampedValue;
+                    }
+
+                    const steps = Math.round((clampedValue - lowerBound) / stepValue);
+                    const snappedValue = lowerBound + steps * stepValue;
+                    return snappedValue;
+                };
+
+                const getFloatConfig = () => {
+                    const minValue = getWidgetFloatValue(minWidget, 0.0);
+                    const maxValue = getWidgetFloatValue(maxWidget, 0.9);
+                    const lowerBound = Math.min(minValue, maxValue);
+                    const upperBound = Math.max(minValue, maxValue);
+                    const stepValue = Math.max(getWidgetFloatValue(stepWidget, 0.02), 0.001);
+
+                    return {
+                        min: lowerBound,
+                        max: upperBound,
+                        // Keep legacy step for compatibility, but ensure actual increment uses step2.
+                        step: stepValue * 10,
+                        step2: stepValue,
+                    };
+                };
+
                 const parseValues = () => {
                     const slotCount = parseSlotCount();
                     if (slotCount <= 0) {
                         return [];
                     }
 
+                    const { min, max, step2 } = getFloatConfig();
                     const parts = String(valuesWidget.value ?? "").split(";");
                     const normalizedValues = [];
 
                     for (let i = 0; i < slotCount; i += 1) {
-                        normalizedValues.push(normalizeFloatValue(parts[i]));
+                        normalizedValues.push(quantizeValue(parts[i], min, max, step2));
                     }
 
                     return normalizedValues;
@@ -311,29 +358,124 @@ app.registerExtension({
                     }
                 };
 
-                const wrapWidgetDrawWithHighlight = (widget, slotIndex) => {
+                const getSelectorWidgets = () => {
+                    return [...(this.widgets || [])].filter(widget => widget?.slowargoFloatSelectorSlot === true);
+                };
+
+                const getSelectorWidgetWidth = () => {
+                    const nodeWidth = Number.isFinite(this.size?.[0]) ? this.size[0] : 0;
+                    return Math.max(0, nodeWidth - SELECT_ICON_GUTTER_WIDTH);
+                };
+
+                const updateSelectorWidgetWidths = () => {
+                    const selectorWidgetWidth = getSelectorWidgetWidth();
+                    for (const widget of getSelectorWidgets()) {
+                        widget.width = selectorWidgetWidth;
+                    }
+                };
+
+                const drawSelectIcon = (widget, ctx, width, slotIndex) => {
+                    if (!ctx || !Number.isFinite(width)) return;
+                    const widgetY = Number.isFinite(widget?.y) ? widget.y : widget?.last_y;
+                    const widgetHeight = globalThis.LiteGraph?.NODE_WIDGET_HEIGHT ?? 20;
+                    if (!Number.isFinite(widgetY)) return;
+
+                    const widgetWidth = Number.isFinite(widget?.width) ? widget.width : getSelectorWidgetWidth();
+                    const rightAlignedX = width - SELECT_ICON_RIGHT_PADDING - SELECT_ICON_SIZE;
+                    const iconX = Math.min(
+                        rightAlignedX,
+                        Math.max(20, widgetWidth + SELECT_ICON_GAP_FROM_WIDGET)
+                    );
+                    const iconY = widgetY + Math.max(0, (widgetHeight - SELECT_ICON_SIZE) * 0.5);
+                    const iconRadius = SELECT_ICON_SIZE * 0.5;
+                    const centerX = iconX + iconRadius;
+                    const centerY = iconY + iconRadius;
+                    const isSelected = clampSelectedIndex() === slotIndex;
+
+                    widget.slowargoFloatSelectorIconRect = {
+                        x: iconX,
+                        y: iconY,
+                        width: SELECT_ICON_SIZE,
+                        height: SELECT_ICON_SIZE,
+                    };
+
+                    const origFillStyle = ctx.fillStyle;
+                    const origStrokeStyle = ctx.strokeStyle;
+                    const origLineWidth = ctx.lineWidth;
+
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, iconRadius - 1, 0, Math.PI * 2);
+                    ctx.fillStyle = isSelected ? SELECT_ICON_ACTIVE_BG : SELECT_ICON_IDLE_BG;
+                    ctx.strokeStyle = isSelected ? SELECT_ICON_ACTIVE_OUTLINE : SELECT_ICON_IDLE_OUTLINE;
+                    ctx.fill();
+                    ctx.stroke();
+
+                    if (isSelected) {
+                        ctx.beginPath();
+                        ctx.arc(centerX, centerY, Math.max(2, iconRadius - 4), 0, Math.PI * 2);
+                        ctx.fillStyle = SELECT_ICON_ACTIVE_OUTLINE;
+                        ctx.fill();
+                    }
+
+                    ctx.fillStyle = origFillStyle;
+                    ctx.strokeStyle = origStrokeStyle;
+                    ctx.lineWidth = origLineWidth;
+                };
+
+                const isPointInRect = (x, y, rect) => {
+                    if (!Number.isFinite(x) || !Number.isFinite(y) || !rect) return false;
+                    return (
+                        x >= rect.x &&
+                        x <= rect.x + rect.width &&
+                        y >= rect.y &&
+                        y <= rect.y + rect.height
+                    );
+                };
+
+                const wrapWidgetDraw = (widget, slotIndex) => {
                     if (!widget?.drawWidget) return;
                     const origDrawWidget = widget.drawWidget;
                     widget.drawWidget = function(ctx, options) {
-                        if (clampSelectedIndex() === slotIndex) {
-                            Object.defineProperty(this, "outline_color", { value: ALERT_OUTLINE_COLOR, configurable: true });
-                            Object.defineProperty(this, "background_color", { value: ALERT_BG_COLOR, configurable: true });
-                        }
-                        const drawResult = origDrawWidget.apply(this, arguments);
-                        delete this.outline_color;
-                        delete this.background_color;
+                        const selectorWidgetWidth = getSelectorWidgetWidth();
+                        const nodeWidth = Number.isFinite(this?.node?.size?.[0])
+                            ? this.node.size[0]
+                            : (Number.isFinite(options?.width) ? options.width : selectorWidgetWidth);
+                        this.width = selectorWidgetWidth;
+                        const drawResult = origDrawWidget.call(this, ctx, {
+                            ...options,
+                            width: selectorWidgetWidth,
+                        });
+                        drawSelectIcon(this, ctx, nodeWidth, slotIndex);
                         return drawResult;
                     };
                 };
 
-                const wrapWidgetMouseSelection = (widget, slotIndex) => {
-                    const origMouse = widget.mouse;
-                    widget.mouse = function(event, pos, node) {
-                        if (event?.type === "pointerdown" || event?.type === "mousedown") {
-                            setSelectedIndex(slotIndex);
+                const wrapWidgetPointerDown = (widget, slotIndex) => {
+                    const origPointerDown = widget.onPointerDown;
+                    widget.onPointerDown = function(pointer, node, canvas) {
+                        setSelectedIndex(slotIndex);
+                        if (typeof origPointerDown === "function") {
+                            return origPointerDown.call(this, pointer, node, canvas);
                         }
-                        return origMouse?.apply(this, arguments);
+                        return false;
                     };
+                };
+
+                const origOnMouseDown = this.onMouseDown;
+                this.onMouseDown = function(event, pos, graphCanvas) {
+                    const localX = pos?.[0];
+                    const localY = pos?.[1];
+                    if (Number.isFinite(localX) && Number.isFinite(localY)) {
+                        const iconHitWidget = getSelectorWidgets().find(widget =>
+                            isPointInRect(localX, localY, widget?.slowargoFloatSelectorIconRect)
+                        );
+                        if (iconHitWidget && Number.isInteger(iconHitWidget.slowargoFloatSelectorIndex)) {
+                            setSelectedIndex(iconHitWidget.slowargoFloatSelectorIndex);
+                            return true;
+                        }
+                    }
+                    return origOnMouseDown?.apply(this, arguments);
                 };
 
                 const rebuildSelectorWidgets = () => {
@@ -347,15 +489,13 @@ app.registerExtension({
                             value,
                             (nextValue) => {
                                 const nextValues = parseValues();
-                                nextValues[slotIndex] = normalizeFloatValue(nextValue);
+                                const { min, max, step2 } = getFloatConfig();
+                                nextValues[slotIndex] = quantizeValue(nextValue, min, max, step2);
                                 setValuesString(nextValues);
                                 setSelectedIndex(slotIndex);
                             },
                             {
-                                min: 0.0,
-                                max: 0.9,
-                                step: 0.02,
-                                precision: 2,
+                                ...getFloatConfig(),
                             }
                         );
 
@@ -364,12 +504,14 @@ app.registerExtension({
                             serialize: false,
                         };
                         selectorWidget.slowargoFloatSelectorSlot = true;
+                        selectorWidget.slowargoFloatSelectorIndex = slotIndex;
 
-                        wrapWidgetDrawWithHighlight(selectorWidget, slotIndex);
-                        wrapWidgetMouseSelection(selectorWidget, slotIndex);
+                        wrapWidgetDraw(selectorWidget, slotIndex);
+                        wrapWidgetPointerDown(selectorWidget, slotIndex);
                     });
 
                     this.setSize?.(this.computeSize());
+                    updateSelectorWidgetWidths();
                     app.graph.setDirtyCanvas(true, true);
                 };
 
@@ -379,6 +521,19 @@ app.registerExtension({
                     rebuildSelectorWidgets();
                     return callbackResult;
                 };
+
+                const wrapConfigWidgetCallback = (widget) => {
+                    const origCallback = widget.callback;
+                    widget.callback = function(value) {
+                        const callbackResult = origCallback?.apply(this, arguments);
+                        rebuildSelectorWidgets();
+                        return callbackResult;
+                    };
+                };
+
+                wrapConfigWidgetCallback(minWidget);
+                wrapConfigWidgetCallback(maxWidget);
+                wrapConfigWidgetCallback(stepWidget);
 
                 const origOnConfigure = this.onConfigure;
                 this.onConfigure = function(info) {
