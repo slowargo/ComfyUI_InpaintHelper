@@ -210,6 +210,187 @@ app.registerExtension({
                 return result;
             };
 
+        } else if (nodeType?.comfyClass == "FloatSelector") {
+            const ALERT_OUTLINE_COLOR = "#ffaa00";
+            const ALERT_BG_COLOR = "#554400";
+
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function() {
+                const result = origOnNodeCreated?.apply(this, arguments);
+
+                const valuesWidget = this.widgets?.find(w => w.name === "values_string");
+                const indexWidget = this.widgets?.find(w => w.name === "selected_index");
+                const slotCountWidget = this.widgets?.find(w => w.name === "slot_count");
+
+                if (!valuesWidget || !indexWidget || !slotCountWidget) {
+                    return result;
+                }
+
+                valuesWidget.hidden = true;
+                indexWidget.hidden = true;
+
+                const parseSlotCount = () => {
+                    const slotCount = Number.parseInt(slotCountWidget.value, 10);
+                    return Number.isFinite(slotCount) ? Math.max(slotCount, 0) : 0;
+                };
+
+                const normalizeFloatValue = (value) => {
+                    const parsed = Number.parseFloat(value);
+                    return Number.isFinite(parsed) ? parsed : 0;
+                };
+
+                const parseValues = () => {
+                    const slotCount = parseSlotCount();
+                    if (slotCount <= 0) {
+                        return [];
+                    }
+
+                    const parts = String(valuesWidget.value ?? "").split(";");
+                    const normalizedValues = [];
+
+                    for (let i = 0; i < slotCount; i += 1) {
+                        normalizedValues.push(normalizeFloatValue(parts[i]));
+                    }
+
+                    return normalizedValues;
+                };
+
+                const formatValues = (values) => {
+                    return values.map(value => `${normalizeFloatValue(value)}`).join(";");
+                };
+
+                const setValuesString = (values) => {
+                    valuesWidget.value = formatValues(values);
+                };
+
+                const clampSelectedIndex = () => {
+                    const slotCount = parseSlotCount();
+                    if (slotCount <= 0) {
+                        indexWidget.value = 0;
+                        return 0;
+                    }
+
+                    const selectedIndex = Number.parseInt(indexWidget.value, 10);
+                    const clampedIndex = Number.isFinite(selectedIndex)
+                        ? Math.min(Math.max(selectedIndex, 0), slotCount - 1)
+                        : 0;
+                    indexWidget.value = clampedIndex;
+                    return clampedIndex;
+                };
+
+                const syncHiddenWidgets = () => {
+                    const values = parseValues();
+                    setValuesString(values);
+                    clampSelectedIndex();
+                    return values;
+                };
+
+                const setSelectedIndex = (nextIndex) => {
+                    const slotCount = parseSlotCount();
+                    const clampedIndex = slotCount <= 0
+                        ? 0
+                        : Math.min(Math.max(Number.parseInt(nextIndex, 10) || 0, 0), slotCount - 1);
+
+                    if (indexWidget.value !== clampedIndex) {
+                        indexWidget.value = clampedIndex;
+                    }
+                    app.graph.setDirtyCanvas(true, true);
+                };
+
+                const removeSelectorWidgets = () => {
+                    const selectorWidgets = [...(this.widgets || [])].filter(widget => widget?.slowargoFloatSelectorSlot === true);
+                    for (const widget of selectorWidgets) {
+                        if (typeof this.removeWidget === "function") {
+                            this.removeWidget(widget);
+                        } else {
+                            const widgetIndex = this.widgets.indexOf(widget);
+                            if (widgetIndex >= 0) {
+                                this.widgets.splice(widgetIndex, 1);
+                            }
+                        }
+                    }
+                };
+
+                const wrapWidgetDrawWithHighlight = (widget, slotIndex) => {
+                    if (!widget?.drawWidget) return;
+                    const origDrawWidget = widget.drawWidget;
+                    widget.drawWidget = function(ctx, options) {
+                        if (clampSelectedIndex() === slotIndex) {
+                            Object.defineProperty(this, "outline_color", { value: ALERT_OUTLINE_COLOR, configurable: true });
+                            Object.defineProperty(this, "background_color", { value: ALERT_BG_COLOR, configurable: true });
+                        }
+                        const drawResult = origDrawWidget.apply(this, arguments);
+                        delete this.outline_color;
+                        delete this.background_color;
+                        return drawResult;
+                    };
+                };
+
+                const wrapWidgetMouseSelection = (widget, slotIndex) => {
+                    const origMouse = widget.mouse;
+                    widget.mouse = function(event, pos, node) {
+                        if (event?.type === "pointerdown" || event?.type === "mousedown") {
+                            setSelectedIndex(slotIndex);
+                        }
+                        return origMouse?.apply(this, arguments);
+                    };
+                };
+
+                const rebuildSelectorWidgets = () => {
+                    const values = syncHiddenWidgets();
+                    removeSelectorWidgets();
+
+                    values.forEach((value, slotIndex) => {
+                        const selectorWidget = this.addWidget(
+                            "number",
+                            `float_${slotIndex + 1}`,
+                            value,
+                            (nextValue) => {
+                                const nextValues = parseValues();
+                                nextValues[slotIndex] = normalizeFloatValue(nextValue);
+                                setValuesString(nextValues);
+                                setSelectedIndex(slotIndex);
+                            },
+                            {
+                                min: 0.0,
+                                max: 0.9,
+                                step: 0.02,
+                                precision: 2,
+                            }
+                        );
+
+                        selectorWidget.options = {
+                            ...(selectorWidget.options || {}),
+                            serialize: false,
+                        };
+                        selectorWidget.slowargoFloatSelectorSlot = true;
+
+                        wrapWidgetDrawWithHighlight(selectorWidget, slotIndex);
+                        wrapWidgetMouseSelection(selectorWidget, slotIndex);
+                    });
+
+                    this.setSize?.(this.computeSize());
+                    app.graph.setDirtyCanvas(true, true);
+                };
+
+                const origSlotCountCallback = slotCountWidget.callback;
+                slotCountWidget.callback = function(value) {
+                    const callbackResult = origSlotCountCallback?.apply(this, arguments);
+                    rebuildSelectorWidgets();
+                    return callbackResult;
+                };
+
+                const origOnConfigure = this.onConfigure;
+                this.onConfigure = function(info) {
+                    const configureResult = origOnConfigure?.apply(this, arguments);
+                    rebuildSelectorWidgets();
+                    return configureResult;
+                };
+
+                rebuildSelectorWidgets();
+                return result;
+            };
+
         } else if (nodeType?.comfyClass == "LoadImageFromOutputsPlus") { // deprecated V3 extension
             console.log("[slowargo.js]", nodeData)
             console.log("[slowargo.js]", nodeType)

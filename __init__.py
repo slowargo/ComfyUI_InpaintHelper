@@ -391,6 +391,63 @@ class FloatSwitch:
 
         return (selected,)
 
+
+class FloatSelector:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "values_string": ("STRING", {
+                    "default": "0.18;0.32;0.55",
+                    "multiline": False,
+                }),
+                "selected_index": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 999,
+                    "step": 1,
+                }),
+                "slot_count": ("INT", {
+                    "default": 2,
+                    "min": 0,
+                    "max": 32,
+                    "step": 1,
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("FLOAT",)
+    RETURN_NAMES = ("selected_float",)
+
+    FUNCTION = "select_float"
+    CATEGORY = "Slowargo"
+
+    @staticmethod
+    def _normalize_values(values_string, slot_count):
+        normalized_slot_count = max(int(slot_count or 0), 0)
+        parts = str(values_string or "").split(";") if values_string is not None else []
+        values = []
+
+        for part in parts[:normalized_slot_count]:
+            try:
+                values.append(float(part.strip()))
+            except (TypeError, ValueError):
+                values.append(0.0)
+
+        while len(values) < normalized_slot_count:
+            values.append(0.0)
+
+        return values
+
+    def select_float(self, values_string, selected_index, slot_count):
+        values = self._normalize_values(values_string, slot_count)
+
+        if not values:
+            return (0.0,)
+
+        clamped_index = min(max(int(selected_index or 0), 0), len(values) - 1)
+        return (values[clamped_index],)
+
 class LoadImageFromOutputPlusV1(nodes.LoadImage):
     @classmethod
     def INPUT_TYPES(cls):
@@ -1219,6 +1276,7 @@ async def delete_entry_api(request):
 # V1 Extension declaration
 NODE_CLASS_MAPPINGS = {
     "FloatSwitch": FloatSwitch,
+    "FloatSelector": FloatSelector,
     "LoadImageFromOutputPlusV1": LoadImageFromOutputPlusV1,
     "LoadImageFromAnyPath": LoadImageFromAnyPath,
     "LoadRecentImagePlusV1": LoadRecentImagePlusV1,
@@ -1233,6 +1291,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FloatSwitch": "Float Switch",
+    "FloatSelector": "Float Selector",
     "LoadImageFromOutputPlusV1": "Load Image (from Outputs) Plus V1 (deprecated)",
     "LoadImageFromAnyPath": "Load Image (from Any Path)",
     "LoadRecentImagePlusV1": "Load Recent Image",
