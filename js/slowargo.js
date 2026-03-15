@@ -136,37 +136,76 @@ app.registerExtension({
             //     return result;
             // }
 
-            // Visual alert for float_ovr when value > 0 (indicating override is active)
-            const ALERT_OUTLINE_COLOR = "#ffaa00";
-            const ALERT_BG_COLOR = "#554400";
+            // Visual alert for active FloatSwitch source input.
+            // float_ovr keeps the existing amber style; float_a/float_b use green.
+            const ALERT_OVR_OUTLINE_COLOR = "#ffaa00";
+            const ALERT_OVR_BG_COLOR = "#554400";
+            const ALERT_MAIN_OUTLINE_COLOR = "#4caf50";
+            const ALERT_MAIN_BG_COLOR = "#1f3d1f";
 
             const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
                 const result = origOnNodeCreated?.apply(this, arguments);
 
+                const floatAWidget = this.widgets?.find(w => w.name === "float_a");
+                const floatBWidget = this.widgets?.find(w => w.name === "float_b");
                 const floatOvrWidget = this.widgets?.find(w => w.name === "float_ovr");
-                if (floatOvrWidget) {
-                    const origDrawWidget = floatOvrWidget.drawWidget;
-                    floatOvrWidget.drawWidget = function(ctx, options) {
-                        if (parseFloat(this.value) > 0) {
-                            // Override widget colors
-                            Object.defineProperty(this, 'outline_color', { value: ALERT_OUTLINE_COLOR, configurable: true });
-                            Object.defineProperty(this, 'background_color', { value: ALERT_BG_COLOR, configurable: true });
+                const toggleWidget = this.widgets?.find(w => w.name === "toggle");
+
+                const getActiveInputName = () => {
+                    const floatOvrValue = parseFloat(floatOvrWidget?.value);
+                    if (Number.isFinite(floatOvrValue) && floatOvrValue > 0) {
+                        return "float_ovr";
+                    }
+                    return toggleWidget?.value ? "float_a" : "float_b";
+                };
+
+                const wrapWidgetDrawWithHighlight = (widget, getHighlightColor) => {
+                    if (!widget?.drawWidget) return;
+                    const origDrawWidget = widget.drawWidget;
+                    widget.drawWidget = function(ctx, options) {
+                        const color = getHighlightColor();
+                        if (color) {
+                            Object.defineProperty(this, "outline_color", { value: color.outline, configurable: true });
+                            Object.defineProperty(this, "background_color", { value: color.background, configurable: true });
                         }
-                        const result = origDrawWidget.apply(this, arguments);
-                        // Restore. So it won't change colors next time if the value is 0
+                        const drawResult = origDrawWidget.apply(this, arguments);
                         delete this.outline_color;
                         delete this.background_color;
-                        return result;
+                        return drawResult;
                     };
+                };
 
-                    const origOnConfigure = this.onConfigure;
-                    this.onConfigure = function(info) {
-                        const result = origOnConfigure?.apply(this, arguments);
-                        app.graph.setDirtyCanvas(true, true);
-                        return result;
+                wrapWidgetDrawWithHighlight(floatOvrWidget, () => {
+                    if (getActiveInputName() !== "float_ovr") return null;
+                    return {
+                        outline: ALERT_OVR_OUTLINE_COLOR,
+                        background: ALERT_OVR_BG_COLOR,
                     };
-                }
+                });
+
+                wrapWidgetDrawWithHighlight(floatAWidget, () => {
+                    if (getActiveInputName() !== "float_a") return null;
+                    return {
+                        outline: ALERT_MAIN_OUTLINE_COLOR,
+                        background: ALERT_MAIN_BG_COLOR,
+                    };
+                });
+
+                wrapWidgetDrawWithHighlight(floatBWidget, () => {
+                    if (getActiveInputName() !== "float_b") return null;
+                    return {
+                        outline: ALERT_MAIN_OUTLINE_COLOR,
+                        background: ALERT_MAIN_BG_COLOR,
+                    };
+                });
+
+                const origOnConfigure = this.onConfigure;
+                this.onConfigure = function(info) {
+                    const result = origOnConfigure?.apply(this, arguments);
+                    app.graph.setDirtyCanvas(true, true);
+                    return result;
+                };
 
                 return result;
             };
