@@ -1,7 +1,7 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { loadCSS, sleep, getMaskEditorStore, getToastStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
+import { loadCSS, sleep, getMaskEditorStore, getMaskEditorDataStore, getToastStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
 import {
     initBrushToolOverlay,
     updateCloneStyle,
@@ -49,6 +49,59 @@ const colorMemory = {
     }
 };
 
+function createClipspaceLayerRef(filename) {
+    return {
+        filename,
+        subfolder: "clipspace",
+        type: "input",
+    };
+}
+
+function syncReloadedClipspaceState({
+    reloadMaskOnly,
+    timestamp,
+    baseImg,
+    baseUrl,
+    maskImg,
+    maskUrl,
+    paintImg,
+    paintUrl,
+}) {
+    const maskEditorStore = getMaskEditorStore();
+    const dataStore = getMaskEditorDataStore();
+    const inputData = dataStore?.inputData;
+
+    if (!inputData) {
+        return;
+    }
+
+    inputData.maskLayer = {
+        image: maskImg,
+        url: maskUrl,
+    };
+
+    if (!reloadMaskOnly && baseImg && baseUrl) {
+        inputData.baseLayer = {
+            image: baseImg,
+            url: baseUrl,
+        };
+        inputData.sourceRef = createClipspaceLayerRef(`clipspace-mask-${timestamp}.png`);
+        if (maskEditorStore) {
+            maskEditorStore.image = baseImg;
+        }
+    }
+
+    if (!reloadMaskOnly) {
+        inputData.paintLayer = paintImg && paintUrl ? {
+            image: paintImg,
+            url: paintUrl,
+        } : undefined;
+        if (dataStore.outputData) {
+            dataStore.outputData = null;
+        }
+    }
+}
+
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor(reloadMaskOnly = false) {
     try {
@@ -93,8 +146,12 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
             img.src = url;
         });
 
+        const maskUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`);
+        const baseUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`);
+        const paintUrl = api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`);
+
         // Load mask layer
-        const maskImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`));
+        const maskImg = await loadImg(maskUrl);
         const maskCtx = canvases[2].getContext('2d', {willReadFrequently: true});
         maskCtx.clearRect(0, 0, canvases[2].width, canvases[2].height);
         maskCtx.drawImage(maskImg, 0, 0, canvases[2].width, canvases[2].height);
@@ -107,9 +164,12 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         }
         maskCtx.putImageData(maskData, 0, 0);
 
+        let baseImg = null;
+        let paintImg = null;
+
         // Load base layer if not mask-only
         if (!reloadMaskOnly) {
-            const baseImg = await loadImg(api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`));
+            baseImg = await loadImg(baseUrl);
             const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
             baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
             baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
@@ -117,15 +177,27 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
 
             // Load paint layer (optional)
             try {
-                const paintImg = await loadImg(api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`));
+                paintImg = await loadImg(paintUrl);
                 const paintCtx = canvases[1].getContext('2d', {willReadFrequently: true});
                 paintCtx.clearRect(0, 0, canvases[1].width, canvases[1].height);
                 paintCtx.drawImage(paintImg, 0, 0, canvases[1].width, canvases[1].height);
                 paintImg.src = '';
             } catch (e) {
                 // Paint layer is optional
+                paintImg = null;
             }
         }
+
+        syncReloadedClipspaceState({
+            reloadMaskOnly,
+            timestamp,
+            baseImg,
+            baseUrl,
+            maskImg,
+            maskUrl,
+            paintImg,
+            paintUrl,
+        });
 
         // Sync GPU textures via Pinia store's canvasHistory.
         // saveState() increments currentStateIndex, which triggers the watch
