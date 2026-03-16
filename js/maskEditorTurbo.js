@@ -57,6 +57,21 @@ function createClipspaceLayerRef(filename) {
     };
 }
 
+async function getLatestClipspaceFilename() {
+    try {
+        const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({watch_folders: 'clipspace [1][input]'})
+        });
+        const data = await response.json();
+        return data.image_name?.[0] || null;
+    } catch (error) {
+        console.error("[slowargo.js] Failed to get latest clipspace filename:", error);
+        return null;
+    }
+}
+
 function syncReloadedClipspaceState({
     reloadMaskOnly,
     timestamp,
@@ -105,19 +120,13 @@ function syncReloadedClipspaceState({
 // === Load Clipspace Content to Current Editor ===
 async function loadClipspaceToEditor(reloadMaskOnly = false) {
     try {
-        const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({watch_folders: 'clipspace [1][input]'})
-        });
-
-        const data = await response.json();
-        if (!data.image_name?.[0]) {
+        const clipspaceFilename = await getLatestClipspaceFilename();
+        if (!clipspaceFilename) {
             console.warn("[slowargo.js] No clipspace files found");
             return;
         }
 
-        const timestamp = data.image_name[0].match(/clipspace-painted-masked-(\d+)\.png/)?.[1];
+        const timestamp = clipspaceFilename.match(/clipspace-painted-masked-(\d+)\.png/)?.[1];
         if (!timestamp) {
             console.warn("[slowargo.js] Invalid clipspace filename");
             return;
@@ -211,7 +220,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         }
 
         console.log("[slowargo.js] Clipspace loaded successfully");
-        return data.image_name[0]; // Return clipspace filename for skip-save optimization
+        return clipspaceFilename; // Return clipspace filename for skip-save optimization
     } catch (error) {
         console.error("[slowargo.js] Failed to load clipspace:", error);
         return null;
@@ -575,7 +584,7 @@ function addFastForwardToggleButton() {
     // Create Reload All Layers button
     const reloadAllBtn = document.createElement("button");
     reloadAllBtn.className = "reload-mask-button";
-    reloadAllBtn.title = "Restore All Layers (Ctrl+L): Load base, mask, and paint layers from most recent clipspace";
+    reloadAllBtn.title = "Restore All Layers: Load base, mask, and paint layers from most recent clipspace";
     const reloadAllIcon = document.createElement("i");
     reloadAllIcon.className = "pi pi-refresh";
     reloadAllBtn.appendChild(reloadAllIcon);
@@ -778,15 +787,21 @@ async function onMaskEditorKeydown(e) {
 
         // Fast Forward
 
-        // Ctrl+L loads clipspace content into current editor
+        // Ctrl+L runs using latest clipspace file without reload/save
         if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
             e.preventDefault();
             e.stopImmediatePropagation();
-            console.log("[slowargo.js] Loading clipspace content...");
-            await loadClipspaceToEditor();
-            // then trigger Fast Forward
-            // return;
-            // Enter to trigger Fast Forward
+            if (editorState.cycleInProgress) return;
+
+            const clipspaceFilename = await getLatestClipspaceFilename();
+            if (!clipspaceFilename) {
+                console.warn("[slowargo.js] Ctrl+L: no clipspace file found");
+                return;
+            }
+
+            console.log("[slowargo.js] Ctrl+L: using latest clipspace and running:", clipspaceFilename);
+            await executeFastForwardCycle(targetNode, clipspaceFilename);
+            return;
         } else if (e.key !== 'Enter') {
             return;
         }
