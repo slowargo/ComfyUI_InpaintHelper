@@ -482,7 +482,7 @@ function setLayerCheckboxChecked(checkbox, checked) {
 }
 
 /**
- * When Alt+clicking the eraser tool, force paint layer as active and visible.
+ * Force paint layer as active and visible.
  * Syncs visibility through Vue's own change handler to keep checkbox state consistent.
  */
 function activateAndShowPaintLayer() {
@@ -497,7 +497,7 @@ function activateAndShowPaintLayer() {
     const paintCheckbox = checkboxes?.[1];
     setLayerCheckboxChecked(paintCheckbox, true);
 
-    // console.log("[slowargo.js] Alt+click eraser: activated paint layer");
+    // console.log("[slowargo.js] activated paint layer");
 }
 
 /**
@@ -534,16 +534,6 @@ function restoreEraserAltHoldOverride() {
     const checkboxes = document.querySelectorAll('.maskEditor_sidePanelLayerCheckbox');
     const baseCheckbox = checkboxes?.[2];
     setLayerCheckboxChecked(baseCheckbox, baseWasVisible);
-}
-
-/**
- * Resolve the eraser tool container from the left toolbar.
- * Current frontend order: pen, paint, eraser, bucket, color fill.
- */
-function getEraserToolContainer(dialog) {
-    const toolItems = dialog.querySelectorAll("div.maskEditor_toolPanelContainer");
-    if (!toolItems || toolItems.length < 3) return null;
-    return toolItems[2];
 }
 
 function addFastForwardToggleButton() {
@@ -835,8 +825,6 @@ export function initFastForwardMode() {
     let initialized = false; // 标志位：是否已初始化当前 editor
     let dialogClickHandler = null;
     let currentDialog = null;
-    let eraserToolEl = null;
-    let eraserAltClickHandler = null;
     let toolPanelHandler = null;
 
     // Note: Keyboard events are bound/unbound dynamically in onEditorReady and cleanup
@@ -853,19 +841,6 @@ export function initFastForwardMode() {
         initBrushToolOverlay();
         initCloneToolEvents();
         initSmudgeToolEvents();
-
-        // Alt+Left click eraser tool => switch active layer to paint and reveal paint canvas.
-        if (eraserToolEl && eraserAltClickHandler) {
-            eraserToolEl.removeEventListener('click', eraserAltClickHandler);
-        }
-        eraserToolEl = getEraserToolContainer(dialog);
-        if (eraserToolEl) {
-            eraserAltClickHandler = (e) => {
-                if (!e.altKey || e.button !== 0) return;
-                activateAndShowPaintLayer();
-            };
-            eraserToolEl.addEventListener('click', eraserAltClickHandler);
-        }
 
         // Bind keyboard events for editor
         window.addEventListener('keydown', onMaskEditorKeydown, true);
@@ -937,12 +912,6 @@ export function initFastForwardMode() {
             currentDialog.removeEventListener('click', dialogClickHandler);
             dialogClickHandler = null;
         }
-        if (eraserToolEl && eraserAltClickHandler) {
-            eraserToolEl.removeEventListener('click', eraserAltClickHandler);
-        }
-        eraserToolEl = null;
-        eraserAltClickHandler = null;
-
         // Cleanup tool panel click listener
         if (toolPanelHandler) {
             const toolPanel = currentDialog?.querySelector('.maskEditor_toolPanelContainer')?.parentElement;
