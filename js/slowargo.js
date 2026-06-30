@@ -909,6 +909,148 @@ app.registerExtension({
 
                 return result;
             };
+        } else if (nodeType?.comfyClass == "ServerFileTransfer") {
+            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const result = origOnNodeCreated?.apply(this, arguments);
+                const node = this;
+
+                const getInput = function(name) {
+                    return node.inputs?.find((input) => input.name === name);
+                };
+
+                const inputHasLink = function(name) {
+                    const input = getInput(name);
+                    return input?.link != null;
+                };
+
+                const getWidgetValue = function(name, defaultValue = "") {
+                    const widget = node.widgets?.find((w) => w.name === name);
+                    if (!widget) {
+                        return defaultValue;
+                    }
+                    return widget.value;
+                };
+
+                const syncSourcePathVisibility = function() {
+                    const sourcePathWidget = node.widgets?.find((w) => w.name === "source_path");
+                    if (sourcePathWidget) {
+                        const shouldHide = inputHasLink("image_source");
+                        if (sourcePathWidget.hidden !== shouldHide) {
+                            sourcePathWidget.hidden = shouldHide;
+                            app.graph.setDirtyCanvas(true, true);
+                        }
+                    }
+                };
+
+                const getImageSourceValue = function() {
+                    const input = getInput("image_source");
+                    if (!input || input.link == null) {
+                        throw new Error("source_path or image_source is required.");
+                    }
+
+                    const link = app.graph.links[input.link];
+                    const sourceNode = link ? app.graph.getNodeById(link.origin_id) : null;
+                    const imageWidget = sourceNode?.widgets?.find((w) => w.name === "image");
+                    const imageValue = imageWidget?.value;
+
+                    if (!imageValue || !String(imageValue).trim()) {
+                        throw new Error("Connected image_source node has no image widget value.");
+                    }
+
+                    return String(imageValue).trim();
+                };
+
+                const rejectConnectedInput = function(name) {
+                    if (inputHasLink(name)) {
+                        const hint = name === "source_path" ? "Use image_source or Auto mode." : "Use Auto mode.";
+                        throw new Error(`Run File Transfer does not support connected ${name}. ${hint}`);
+                    }
+                };
+
+                const transferFn = async function () {
+                    const button = node.widgets?.find((w) => w.name === "Run File Transfer");
+                    const originalName = button?.name;
+
+                    try {
+                        if (button) {
+                            button.name = "Running...";
+                            app.graph.setDirtyCanvas(true, true);
+                        }
+
+                        syncSourcePathVisibility();
+
+                        rejectConnectedInput("target_dir");
+                        rejectConnectedInput("target_filename");
+                        rejectConnectedInput("move_file");
+
+                        const options = {
+                            target_dir: getWidgetValue("target_dir"),
+                            target_filename: getWidgetValue("target_filename"),
+                            move_file: !!getWidgetValue("move_file"),
+                        };
+
+                        if (inputHasLink("image_source")) {
+                            options.image_source = getImageSourceValue();
+                        } else {
+                            rejectConnectedInput("source_path");
+                            options.source_path = getWidgetValue("source_path");
+                        }
+
+                        const response = await api.fetchApi("/slowargo_api/file_transfer", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(options)
+                        });
+
+                        const result = await response.json();
+                        if (!response.ok || !result.success) {
+                            throw new Error(result.error || result.message || await response.text());
+                        }
+
+                        console.log("[slowargo.js] ServerFileTransfer result", result);
+                        if (button) {
+                            button.name = result.message || "Done";
+                            app.graph.setDirtyCanvas(true, true);
+                            setTimeout(() => {
+                                button.name = originalName;
+                                app.graph.setDirtyCanvas(true, true);
+                            }, 1500);
+                        }
+                    } catch (error) {
+                        console.error("[slowargo.js] ServerFileTransfer failed", error);
+                        if (button) {
+                            button.name = "Failed";
+                            app.graph.setDirtyCanvas(true, true);
+                            setTimeout(() => {
+                                button.name = originalName;
+                                app.graph.setDirtyCanvas(true, true);
+                            }, 2000);
+                        }
+                    }
+                };
+
+                this.addWidget("button", "Run File Transfer", null, transferFn);
+
+                const origOnConnectionsChange = this.onConnectionsChange;
+                this.onConnectionsChange = function() {
+                    const connectionResult = origOnConnectionsChange?.apply(this, arguments);
+                    syncSourcePathVisibility();
+                    return connectionResult;
+                };
+
+                syncSourcePathVisibility();
+
+                this.handleAction = async function (action) {
+                    if (action === "Transfer") {
+                        await transferFn();
+                    }
+                };
+
+                this.constructor.exposedActions = ["Transfer"];
+
+                return result;
+            };
         } else if (nodeType?.comfyClass == "RunButtonNode") {
             const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {

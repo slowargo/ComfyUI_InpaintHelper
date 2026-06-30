@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import List, Tuple
@@ -670,6 +671,66 @@ class RefreshTriggerV1:
     def IS_CHANGED(trigger, watch_folders=""):
         return watch_folders
 
+
+def resolve_image_widget_source_path(prompt, node_id, input_name="trigger"):
+    node_key = str(node_id)
+    node_prompt = prompt.get(node_key)
+    if node_prompt is None:
+        raise ValueError(f"Node {node_key} was not found in prompt")
+
+    trigger_input = node_prompt.get("inputs", {}).get(input_name)
+    if not isinstance(trigger_input, (list, tuple)) or len(trigger_input) < 1:
+        raise ValueError(f"Connect {input_name} to a node output")
+
+    origin_key = str(trigger_input[0])
+    origin_prompt = prompt.get(origin_key)
+    if origin_prompt is None:
+        raise ValueError(f"Connected source node {origin_key} was not found in prompt")
+
+    image_value = origin_prompt.get("inputs", {}).get("image")
+    if isinstance(image_value, (list, tuple)):
+        raise ValueError("Connected source node image input is linked, not a widget value")
+    if image_value is None or not str(image_value).strip():
+        raise ValueError("Connected source node has no image widget value")
+
+    image_text = str(image_value).strip()
+    image_path = Path(image_text).expanduser()
+    if image_path.is_absolute():
+        return str(image_path)
+
+    output_dir = Path(folder_paths.get_output_directory())
+    return str(Path(folder_paths.get_annotated_filepath(image_text, output_dir)))
+
+
+class ImageWidgetSourcePath:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "trigger": ("*", {"tooltip": "Connect to any output of a node that has an image widget."}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "node_id": "UNIQUE_ID",
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("source_path",)
+    DESCRIPTION = "Get the server-side source path from the connected source node's image widget."
+    FUNCTION = "get_source_path"
+    CATEGORY = "Slowargo"
+
+    def get_source_path(self, trigger, prompt=None, node_id=None):
+        return (resolve_image_widget_source_path(prompt or {}, node_id),)
+
+    @classmethod
+    def IS_CHANGED(cls, trigger, prompt=None, node_id=None):
+        try:
+            return resolve_image_widget_source_path(prompt or {}, node_id)
+        except Exception:
+            return ""
+
 class LoadImageFromAnyPath:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1158,6 +1219,121 @@ class RunButtonNode:
         # print(f"按钮被点击了！当前触发次数: {trigger_count}")
         return trigger_count
 
+def resolve_server_file_source_path(source_path):
+    source_text = str(source_path or "").strip()
+    if not source_text:
+        raise ValueError("source_path is required")
+
+    source = Path(source_text).expanduser()
+    if source.exists() or source.is_absolute():
+        return source
+
+    output_dir = Path(folder_paths.get_output_directory())
+    return Path(folder_paths.get_annotated_filepath(source_text, output_dir)).expanduser()
+
+
+def transfer_server_file(source_path, target_dir, target_filename, move_file=False):
+    target_dir_text = str(target_dir or "").strip()
+    target_filename_text = str(target_filename or "").strip()
+
+    if not target_dir_text:
+        raise ValueError("target_dir is required")
+
+    source = resolve_server_file_source_path(source_path)
+    target_directory = Path(target_dir_text).expanduser()
+    if not source.exists():
+        raise FileNotFoundError(f"Source file does not exist: {source}")
+    if not source.is_file():
+        raise ValueError(f"Source path is not a file: {source}")
+
+    filename = os.path.basename(target_filename_text) if target_filename_text else source.name
+    if not filename:
+        raise ValueError("target_filename is required when source_path has no file name")
+
+    target_directory.mkdir(parents=True, exist_ok=True)
+    target = target_directory / filename
+
+    try:
+        if source.resolve() == target.resolve():
+            raise ValueError("Source and target paths are the same")
+    except FileNotFoundError:
+        # The target may not exist yet on some Python/platform combinations.
+        pass
+
+    if target.exists() and target.is_dir():
+        raise ValueError(f"Target path is a directory: {target}")
+
+    if move_file:
+        shutil.move(str(source), str(target))
+        action = "moved"
+    else:
+        shutil.copy2(str(source), str(target))
+        action = "copied"
+
+    return {
+        "success": True,
+        "source_path": str(source),
+        "target_path": str(target),
+        "message": f"File {action} to {target}",
+    }
+
+
+class ServerFileTransfer:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_path": ("STRING", {"default": "", "tooltip": "Source file path on the server. Empty can use image_source."}),
+                "target_dir": ("STRING", {"default": "", "tooltip": "Target directory on the server."}),
+                "target_filename": ("STRING", {"default": "", "tooltip": "Target file name. Empty uses the source file name. Parent paths are ignored."}),
+                "move_file": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "Move",
+                    "label_off": "Copy",
+                    "tooltip": "Move the source file instead of copying it."
+                }),
+                "auto_execute": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Auto",
+                    "label_off": "Manual",
+                    "tooltip": "Auto runs during prompt execution. Manual runs only from the node button."
+                }),
+            },
+            "optional": {
+                "image_source": ("*", {"tooltip": "Connect to any output of a node that has an image widget."}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "node_id": "UNIQUE_ID",
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "BOOLEAN", "STRING")
+    RETURN_NAMES = ("source_path", "target_path", "success", "message")
+    DESCRIPTION = "Copy or move a server-side file to a target directory and file name."
+    FUNCTION = "execute"
+    CATEGORY = "Slowargo"
+    OUTPUT_NODE = True
+    NOT_IDEMPOTENT = True
+
+    def execute(self, source_path="", target_dir="", target_filename="", move_file=False, auto_execute=True, image_source=None, prompt=None, node_id=None):
+        if not auto_execute:
+            return (source_path, "", False, "Skipped: manual mode")
+
+        try:
+            source_path = resolve_image_widget_source_path(prompt or {}, node_id, "image_source")
+        except Exception:
+            if not str(source_path or "").strip():
+                raise
+
+        result = transfer_server_file(source_path, target_dir, target_filename, move_file)
+        return (
+            result["source_path"],
+            result["target_path"],
+            result["success"],
+            result["message"],
+        )
+
 class ClearHistoryNode(io.ComfyNode):
     """Clear canvas editing history"""
 
@@ -1267,6 +1443,26 @@ async def refresh_previews_recent_api(request):
             "error": str(e)
         }, status=500)
 
+@PromptServer.instance.routes.post("/slowargo_api/file_transfer")
+async def file_transfer_api(request):
+    try:
+        data = await request.json()
+        source_path = data.get("image_source") or data.get("source_path", "")
+        result = transfer_server_file(
+            source_path,
+            data.get("target_dir", ""),
+            data.get("target_filename", ""),
+            data.get("move_file", False),
+        )
+        return web.json_response(result)
+
+    except Exception as e:
+        logger.error(f"Error in file_transfer route: {str(e)}")
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
 # 获取历史记录接口
 @PromptServer.instance.routes.get("/slowargo_api/get_string_history")
 async def get_string_history_api(request):
@@ -1339,12 +1535,14 @@ NODE_CLASS_MAPPINGS = {
     "FloatSelector": FloatSelector,
     "LoadImageFromOutputPlusV1": LoadImageFromOutputPlusV1,
     "LoadImageFromAnyPath": LoadImageFromAnyPath,
+    "ImageWidgetSourcePath": ImageWidgetSourcePath,
     "LoadRecentImagePlusV1": LoadRecentImagePlusV1,
     "SaveImageToFileName": SaveImageToFileName,
     "ImageSimilaritySSIM": ImageSimilaritySSIM,
     "ExtractSubFolder": ExtractSubFolder,
     "RememberStrings": RememberStrings,
     "RunButtonNode": RunButtonNode,
+    "ServerFileTransfer": ServerFileTransfer,
     "RefreshTriggerV1": RefreshTriggerV1,
     "ClearHistoryNode": ClearHistoryNode,
 }
@@ -1354,12 +1552,14 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FloatSelector": "Float Selector",
     "LoadImageFromOutputPlusV1": "Load Image (from Outputs) Plus V1 (deprecated)",
     "LoadImageFromAnyPath": "Load Image (from Any Path)",
+    "ImageWidgetSourcePath": "Image Widget Source Path",
     "LoadRecentImagePlusV1": "Load Recent Image",
     "SaveImageToFileName": "Save Image to Specified File Name",
     "ImageSimilaritySSIM": "Image Similarity (SSIM)",
     "ExtractSubFolder": "Extract Sub Folder",
     "RememberStrings": "Remember Recent Strings",
     "RunButtonNode": "Run Button",
+    "ServerFileTransfer": "Server File Transfer",
     "RefreshTriggerV1": "Refresh Trigger",
     "ClearHistoryNode": "Clear History",
 }
