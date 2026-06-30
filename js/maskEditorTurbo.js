@@ -133,7 +133,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         }
 
         const canvases = document.querySelectorAll("#maskEditorCanvasContainer canvas");
-        if (canvases.length < 3) return;
+        if (canvases.length < 4) return; // 4 canvases: img, rgb, mask, gpu
 
         console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp, "maskOnly:", reloadMaskOnly);
 
@@ -229,10 +229,18 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
 // === Fast Forward Mode Helper Functions ===
 
 // === Editor Blur Toggle ===
+/** Get the Reka UI overlay element that is the sibling of .mask-editor-dialog */
+function getEditorOverlay() {
+    const dialog = document.querySelector('.mask-editor-dialog');
+    if (!dialog) return null;
+    // In Reka UI, overlay and content are teleported as siblings in body (overlay first)
+    return dialog.previousElementSibling;
+}
+
 function toggleEditorBlur() {
     editorState.isBlurred = !editorState.isBlurred;
     const editor = document.querySelector(".mask-editor-dialog");
-    const mask = document.querySelector(".p-dialog-mask");
+    const mask = getEditorOverlay();
 
     if (editor) {
         if (editorState.isBlurred) {
@@ -421,13 +429,10 @@ function restoreColorAndAddToggle() {
     addFastForwardToggleButton();
 
     // === 最大化 mask editor dialog ===
-    const maximizeBtn = document.querySelector("div.mask-editor-dialog button.p-dialog-maximize-button");
+    // Reka UI maximize button renders via DialogMaximize with lucide icons
+    const maximizeBtn = document.querySelector('.icon-\\[lucide--maximize-2\\]')?.closest('button');
     if (maximizeBtn) {
-        // maxHeight isn't available yet at this moment
-        // const dialogMask = document.querySelector("div.p-dialog-mask")
-        // const maxHeight = window.getComputedStyle(dialogMask).maxHeight;
         maximizeBtn.click();
-        // console.log("[slowargo.js] Mask editor dialog maximized");
     }
 
     // Reset blur state on editor open
@@ -830,7 +835,7 @@ export function initFastForwardMode() {
     // Note: Keyboard events are bound/unbound dynamically in onEditorReady and cleanup
 
     // Two-phase observer for detecting mask editor opening
-    // Phase 1: Monitor body direct children for p-dialog-mask appearance/removal (cheap)
+    // Phase 1: Monitor body direct children for dialog portal appearance/removal (cheap)
     // Phase 2: Once dialog found, monitor its subtree for side panel readiness (scoped)
     function onEditorReady(dialog) {
         initialized = true;
@@ -921,16 +926,20 @@ export function initFastForwardMode() {
 
         // Cleanup UI elements
         cleanupFastForwardUI(currentDialog);
-        // Extra - Make GC happy
-        currentDialog.querySelectorAll('canvas').forEach(c => { c.width = 0; c.height = 0; c.parentNode?.removeChild(c);});
-        currentDialog.querySelectorAll('img').forEach(c => { c.src = '';c.parentNode?.removeChild(c); })
-        currentDialog.innerHTML = "";
+        // Clear canvas GPU resources without removing Vue-managed DOM elements
+        try {
+            currentDialog.querySelectorAll('canvas').forEach(c => {
+                c.width = 0;
+                c.height = 0;
+            });
+        } catch (_) { /* ignore unmounted canvases */ }
         currentDialog = null;
     }
 
-    // Phase 1: Only watch body direct children — triggers when p-dialog-mask is added/removed
+    // Phase 1: Watch body direct children — triggers when dialog portal appears/removes
+    // Reka UI teleports overlay+content as siblings, so query .mask-editor-dialog directly
     const observer = new MutationObserver(() => {
-        const dialog = document.querySelector("body > .p-dialog-mask .mask-editor-dialog");
+        const dialog = document.querySelector(".mask-editor-dialog");
 
         if (!dialog && initialized) {
             // Editor closed — cleanup resources
