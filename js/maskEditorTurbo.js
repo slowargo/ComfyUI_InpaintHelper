@@ -926,13 +926,7 @@ export function initFastForwardMode() {
 
         // Cleanup UI elements
         cleanupFastForwardUI(currentDialog);
-        // Clear canvas GPU resources without removing Vue-managed DOM elements
-        try {
-            currentDialog.querySelectorAll('canvas').forEach(c => {
-                c.width = 0;
-                c.height = 0;
-            });
-        } catch (_) { /* ignore unmounted canvases */ }
+        // Canvas cleanup is now handled by the framework (fix/maskeditor-canvas-memory-leak)
         currentDialog = null;
     }
 
