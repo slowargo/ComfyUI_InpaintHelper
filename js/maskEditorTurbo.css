@@ -43,8 +43,8 @@
     transition: left 0.3s ease !important;
 }
 
-/* Hide dialog mask overlay background when editor is blurred - only the dark background, not the dialog */
-.p-dialog-mask.editor-blurred-mask {
+/* Hide overlay background when editor is blurred (Reka DialogOverlay, no .p-dialog-mask) */
+.editor-blurred-mask {
     background-color: transparent !important;
     pointer-events: none !important;          /* Allow clicks to pass through to main interface */
 }

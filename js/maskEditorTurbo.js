@@ -247,10 +247,14 @@ function toggleEditorBlur() {
             editor.classList.add("editor-blurred");
             // Hide mask overlay
             if (mask) mask.classList.add("editor-blurred-mask");
+            // Reka modal sets body.pointerEvents='none'; restore for main canvas interaction
+            document.body.style.pointerEvents = 'auto';
         } else {
             editor.classList.remove("editor-blurred");
             // Show mask overlay
             if (mask) mask.classList.remove("editor-blurred-mask");
+            // Restore Reka modal pointer-events lock
+            document.body.style.pointerEvents = 'none';
 
             // Restore selected node when returning from blur
             if (editorState.sourceNodeId) {
