@@ -21,6 +21,22 @@ import {
 
 loadCSS(import.meta.url, "./maskEditorTurbo.css");
 
+// === Frontend version assumptions ===
+// This file targets the NEW Reka-based mask editor (frontend ~v1.4x+) and is
+// NOT backward-compatible with the old PrimeVue editor (<= v1.37.2). If issues
+// surface on an old frontend, these are the version-specific touch points plus
+// the dual-compat sketch (detect once at open in the MutationObserver branch:
+// `editorState.isReka = !dialog.closest('.p-dialog-mask')`):
+//   - getEditorOverlay(): Reka overlay is `dialog.previousElementSibling`; the
+//     old PrimeVue overlay is the dialog's `.p-dialog-mask` ancestor.
+//   - toggleEditorBlur(): Reka modal sets body{pointer-events:none}; old does
+//     not — forcing 'none' on old would freeze the main UI (a body CSS class
+//     toggled on/off is the version-agnostic fix).
+//   - canvas guard: new editor has 4 canvases (img/rgb/mask/gpu), old has 3.
+//   - onEditorClose(): new frontend frees canvases on teardown; old needs the
+//     manual canvas cleanup (guard with !editorState.isReka) to avoid a leak.
+//   - maximize button: new uses the lucide icon; old uses .p-dialog-maximize-button.
+
 // === Editor State ===
 const editorState = {
     // Fast Forward Mode
