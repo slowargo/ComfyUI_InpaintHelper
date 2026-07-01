@@ -21,21 +21,20 @@ import {
 
 loadCSS(import.meta.url, "./maskEditorTurbo.css");
 
-// === Frontend version assumptions ===
-// This file targets the NEW Reka-based mask editor (frontend ~v1.4x+) and is
-// NOT backward-compatible with the old PrimeVue editor (<= v1.37.2). If issues
-// surface on an old frontend, these are the version-specific touch points plus
-// the dual-compat sketch (detect once at open in the MutationObserver branch:
-// `editorState.isReka = !dialog.closest('.p-dialog-mask')`):
-//   - getEditorOverlay(): Reka overlay is `dialog.previousElementSibling`; the
-//     old PrimeVue overlay is the dialog's `.p-dialog-mask` ancestor.
-//   - toggleEditorBlur(): Reka modal sets body{pointer-events:none}; old does
-//     not — forcing 'none' on old would freeze the main UI (a body CSS class
-//     toggled on/off is the version-agnostic fix).
+// === Dual frontend support ===
+// Works with BOTH the new Reka-based mask editor (frontend ~v1.4x+) and the old
+// PrimeVue editor (<= v1.37.2). The variant is detected once when the editor
+// opens (`editorState.isReka = !dialog.closest('.p-dialog-mask')`, set in the
+// MutationObserver open branch). Version-specific touch points:
+//   - getEditorOverlay(): old overlay is the dialog's `.p-dialog-mask` ancestor;
+//     new overlay is `dialog.previousElementSibling`.
+//   - toggleEditorBlur(): only the new Reka modal locks body{pointer-events:none};
+//     a body `.mask-editor-blur-active` class (with !important) frees the main UI
+//     on new and is a harmless no-op on old.
 //   - canvas guard: new editor has 4 canvases (img/rgb/mask/gpu), old has 3.
-//   - onEditorClose(): new frontend frees canvases on teardown; old needs the
-//     manual canvas cleanup (guard with !editorState.isReka) to avoid a leak.
-//   - maximize button: new uses the lucide icon; old uses .p-dialog-maximize-button.
+//   - onEditorClose(): new frontend frees canvases on teardown; old has none, so
+//     the manual canvas cleanup runs only when !editorState.isReka.
+//   - maximize button: old uses .p-dialog-maximize-button, new the lucide icon.
 
 // === Editor State ===
 const editorState = {
@@ -46,6 +45,10 @@ const editorState = {
 
     // Editor Blur
     isBlurred: false,       // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
+
+    // Frontend variant, detected once when the editor opens (see MutationObserver).
+    // true = new Reka dialog; false = old PrimeVue dialog. Drives version-specific cleanup.
+    isReka: true,
     /**
      * Previous base-layer visibility captured at Alt-hold start in eraser mode.
      * `null` means Alt-hold override is inactive.
@@ -149,7 +152,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         }
 
         const canvases = document.querySelectorAll("#maskEditorCanvasContainer canvas");
-        if (canvases.length < 4) return; // 4 canvases: img, rgb, mask, gpu
+        if (canvases.length < 3) return; // 3 (old: img/rgb/mask) or 4 (new: +gpu); only [0..2] used
 
         console.log("[slowargo.js] Loading clipspace, timestamp:", timestamp, "maskOnly:", reloadMaskOnly);
 
@@ -245,12 +248,13 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
 // === Fast Forward Mode Helper Functions ===
 
 // === Editor Blur Toggle ===
-/** Get the Reka UI overlay element that is the sibling of .mask-editor-dialog */
+/** Get the dialog overlay element across both frontend variants. */
 function getEditorOverlay() {
     const dialog = document.querySelector('.mask-editor-dialog');
     if (!dialog) return null;
-    // In Reka UI, overlay and content are teleported as siblings in body (overlay first)
-    return dialog.previousElementSibling;
+    // Old PrimeVue: dialog is nested inside its `.p-dialog-mask` overlay.
+    // New Reka: overlay and content are teleported as siblings (overlay first).
+    return dialog.closest('.p-dialog-mask') || dialog.previousElementSibling;
 }
 
 function toggleEditorBlur() {
@@ -263,14 +267,12 @@ function toggleEditorBlur() {
             editor.classList.add("editor-blurred");
             // Hide mask overlay
             if (mask) mask.classList.add("editor-blurred-mask");
-            // Reka modal sets body.pointerEvents='none'; restore for main canvas interaction
-            document.body.style.pointerEvents = 'auto';
+            document.body.classList.add('mask-editor-blur-active');
         } else {
             editor.classList.remove("editor-blurred");
             // Show mask overlay
             if (mask) mask.classList.remove("editor-blurred-mask");
-            // Restore Reka modal pointer-events lock
-            document.body.style.pointerEvents = 'none';
+            document.body.classList.remove('mask-editor-blur-active');
 
             // Restore selected node when returning from blur
             if (editorState.sourceNodeId) {
@@ -449,27 +451,15 @@ function restoreColorAndAddToggle() {
     addFastForwardToggleButton();
 
     // === 最大化 mask editor dialog ===
-    // Reka UI maximize button renders via DialogMaximize with lucide icons
-    const maximizeBtn = document.querySelector('.icon-\\[lucide--maximize-2\\]')?.closest('button');
+    // Old PrimeVue: .p-dialog-maximize-button; new Reka: DialogMaximize lucide icon.
+    const maximizeBtn = document.querySelector('.mask-editor-dialog button.p-dialog-maximize-button')
+        || document.querySelector('.icon-\\[lucide--maximize-2\\]')?.closest('button');
     if (maximizeBtn) {
         maximizeBtn.click();
     }
 
     // Reset blur state on editor open
     editorState.isBlurred = false;
-
-    // Apply blur state to editor
-    // const editor = document.querySelector(".mask-editor-dialog");
-    // const mask = document.querySelector(".p-dialog-mask");
-    // if (editor) {
-    //     if (editorState.isBlurred) {
-    //         editor.classList.add("editor-blurred");
-    //         if (mask) mask.classList.add("editor-blurred-mask");
-    //     } else {
-    //         editor.classList.remove("editor-blurred");
-    //         if (mask) mask.classList.remove("editor-blurred-mask");
-    //     }
-    // }
 
     return true;
 }
@@ -946,7 +936,19 @@ export function initFastForwardMode() {
 
         // Cleanup UI elements
         cleanupFastForwardUI(currentDialog);
-        // Canvas cleanup is now handled by the framework (fix/maskeditor-canvas-memory-leak)
+        document.body.classList.remove('mask-editor-blur-active');
+
+        // New Reka frontend frees canvases on teardown (fix/maskeditor-canvas-memory-leak).
+        // Old PrimeVue has no such teardown, so clear the backing store manually to avoid a
+        // VRAM leak — width/height=0 only, never removeChild (that would break the DOM).
+        if (!editorState.isReka) {
+            try {
+                currentDialog?.querySelectorAll('canvas').forEach(c => {
+                    c.width = 0;
+                    c.height = 0;
+                });
+            } catch (_) { /* ignore unmounted canvases */ }
+        }
         currentDialog = null;
     }
 
@@ -961,7 +963,9 @@ export function initFastForwardMode() {
         }
 
         if (dialog && !initialized) {
-            // Editor opened — start phase 2 to wait for side panel
+            // Editor opened — detect frontend variant once (dialog + its overlay are
+            // mounted together), then start phase 2 to wait for side panel.
+            editorState.isReka = !dialog.closest('.p-dialog-mask');
             waitForSidePanel(dialog);
         }
     });

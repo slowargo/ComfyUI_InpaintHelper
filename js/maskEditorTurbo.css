@@ -27,11 +27,6 @@
     pointer-events: none;
 }
 
-/* Adjust topbar layout when editor is blurred - align buttons to left so they move with editor */
-/*.mask-editor-dialog.editor-blurred .p-dialog-header {*/
-/*    justify-content: flex-start !important;*/
-/*}*/
-
 /* Adjust button container position when editor is blurred - move closer to edge */
 .mask-editor-dialog.editor-blurred .ff-mode-button-container {
     left: 10px !important;
@@ -47,6 +42,12 @@
 .editor-blurred-mask {
     background-color: transparent !important;
     pointer-events: none !important;          /* Allow clicks to pass through to main interface */
+}
+
+/* Blur mode: free the main UI. New Reka modal locks body{pointer-events:none} inline;
+   this !important override beats it. On old PrimeVue body was never locked, so it's a no-op. */
+body.mask-editor-blur-active {
+    pointer-events: auto !important;
 }
 
 /* === Reload Mask Button === */
