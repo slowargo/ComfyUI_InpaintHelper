@@ -119,15 +119,17 @@ def get_recent_image_files(
             logger.warning(f"Invalid dir: {full_dir}")
             continue
 
+        # 复用 os.scandir 返回的 DirEntry 里已缓存的 stat（Windows 上无需额外 syscall），
+        # 避免转成 Path 后对目录内每个文件再各发一次 stat()——目录文件多时这是主要开销。
         recent_files = []
         for entry in os.scandir(full_dir):
             if is_valid_image(entry):
-                recent_files.append(Path(entry))
+                recent_files.append((Path(entry.path), entry.stat().st_mtime))
 
-        recent_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        recent_files.sort(key=lambda t: t[1], reverse=True)
         recent_files = recent_files[:max_count]
 
-        for path in recent_files:
+        for path, mtime in recent_files:
             # 相对于 full_dir 的相对路径
             rel_path = path.relative_to(full_dir).as_posix()
 
@@ -142,12 +144,13 @@ def get_recent_image_files(
             else:
                 display_name = display_base
 
-            file_items.append((path, display_name))
+            # 携带 mtime，供后面全局排序复用，避免再次 stat
+            file_items.append((path, display_name, mtime))
 
-    # 全局按修改时间重新排序
-    file_items.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
+    # 全局按修改时间重新排序（复用上面已取到的 mtime）
+    file_items.sort(key=lambda x: x[2], reverse=True)
 
-    return [display_name for _, display_name in file_items]
+    return [display_name for _, display_name, _ in file_items]
 #######################################################################################################################
 # V3 style nodes
 
