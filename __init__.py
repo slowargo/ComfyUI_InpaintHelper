@@ -1,7 +1,9 @@
+import heapq
 import json
 import logging
 import os
 import shutil
+import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import List, Tuple
@@ -78,10 +80,115 @@ def process_image_to_tensor(image_path):
 
     return output_image, output_mask, meta_data
 
+_FINGERPRINT_CHUNK = 64 * 1024
+
+
+def file_content_fingerprint(path) -> str:
+    """给 IS_CHANGED 用的文件指纹：(size, mtime_ns, 首尾各 64KB 的 sha256)。
+
+    不做整文件哈希：实测 3.6MB 的 PNG 全读约 10.6ms，只读首尾两块约 0.2ms。
+    也不用纯 (mtime_ns, size)：NTFS 时间戳的实际更新粒度远粗于 100ns，
+    实测同一路径背靠背写入两份不同内容会拿到完全相同的 (mtime_ns, size)，
+    而 SaveImageToFileName 正是往固定文件名原地覆盖、再喂给本节点——
+    这是本插件明确支持的工作流，纯 stat 指纹会让节点漏掉这次改动。
+    注意 NOT_IDEMPOTENT 并不强制重新执行（comfy_execution/caching.py 只是把
+    node_id 加进签名），IS_CHANGED 仍是签名里唯一对内容敏感的部分。
+
+    文件不存在/不可读时照旧向上抛，交给 execution.py 处理。
+    """
+    st = os.stat(path)
+    m = hashlib.sha256()
+    m.update(f"{st.st_size}:{st.st_mtime_ns}:".encode())
+    with open(path, 'rb') as f:
+        if st.st_size <= _FINGERPRINT_CHUNK * 2:
+            m.update(f.read())
+        else:
+            m.update(f.read(_FINGERPRINT_CHUNK))
+            f.seek(-_FINGERPRINT_CHUNK, os.SEEK_END)
+            m.update(f.read())
+    return m.hexdigest()
+
+
+# 单目录扫描结果缓存：key=(绝对目录, sub_folder, label, max_count) -> (目录 mtime_ns, 存入时刻, [(mtime, 显示名)])
+# 失效判断用两道条件，任一不满足就重扫：
+#   1) 目录自身的 mtime_ns 未变——新增/删除/改名会更新它；
+#   2) 缓存年龄未超过 _RECENT_DIR_TTL。
+# 光靠条件 1 不够：原地覆盖同名文件（SaveImageToFileName 就是这么干的）只会改
+# 文件的 mtime，不会改目录的，而缓存里存的 mtime 同时决定了跨目录排序和
+# top-N 的入选，漏判会让刚存的图一直不出现在列表里。TTL 把这种陈旧限死在 1 秒内。
+# 一次 os.stat 约 7us，重扫一个几百文件的目录（clipspace 实测 372 个约 5ms）贵三个
+# 数量级；真正要挡的是 INPUT_TYPES 在同一次 prompt 校验里被连续调用好几次。
+_RECENT_DIR_TTL = 1.0
+_recent_dir_cache: dict = {}
+
+
+def _list_recent_in_dir(
+    full_dir: Path,
+    sub_folder: str,
+    label: str,
+    max_count: int,
+    valid_exts: set,
+    use_cache: bool = True,
+) -> List[Tuple[float, str]]:
+    """扫描单个目录，返回按 mtime 降序的前 max_count 项 (mtime, 显示名称)。
+
+    use_cache=False 只跳过“读”缓存，扫完照样把新结果写回去——否则手动刷新
+    只能修好这一次的 HTTP 响应，下一次 INPUT_TYPES 又会读到那条没被覆盖的旧记录。
+    """
+    cache_key = (str(full_dir), sub_folder, label, max_count)
+    # os.stat 必须严格早于下面的 os.scandir：并发下最坏只会把偏旧的 mtime 和
+    # 偏新的内容存在一起，导致多扫一次，而不会把陈旧结果当成新的发出去。
+    try:
+        dir_mtime_ns = os.stat(full_dir).st_mtime_ns
+    except OSError:
+        dir_mtime_ns = None
+    now = time.monotonic()
+    if use_cache and dir_mtime_ns is not None:
+        cached = _recent_dir_cache.get(cache_key)
+        if cached is not None and cached[0] == dir_mtime_ns and now - cached[1] < _RECENT_DIR_TTL:
+            return cached[2]
+
+    # 热路径里不构造 Path 对象：原实现对每个文件都要建两个 Path（一次判后缀、一次存路径），
+    # 几百个文件下这部分开销比 scandir 本身还大。DirEntry 已缓存 stat，
+    # entry.stat() 在 Windows 上不会再发 syscall。
+    entries: List[Tuple[float, str]] = []
+    with os.scandir(full_dir) as it:
+        for entry in it:
+            name = entry.name
+            if name.startswith('.'):
+                continue
+            dot = name.rfind('.')
+            if dot < 0 or name[dot:].lower() not in valid_exts:
+                continue
+            if not entry.is_file():
+                continue
+            entries.append((entry.stat().st_mtime, name))
+
+    # 只要前 max_count 个，用 nlargest 避免对整个目录做全排序。
+    # 必须带 key：不带 key 会拿整个 (mtime, name) 元组比较，mtime 相同的文件
+    # 变成按文件名倒序，连入选的那批都会变（解压/robocopy 拷进来的图常常时间戳全同）。
+    # 带 key 的 nlargest 内部用递减序号打破平局，等价于原来 reverse=True 的稳定排序。
+    result: List[Tuple[float, str]] = []
+    for mtime, name in heapq.nlargest(max_count, entries, key=lambda t: t[0]):
+        # 非递归 scandir，相对 full_dir 的路径就是文件名本身
+        display_base = f"{sub_folder}/{name}" if sub_folder else name
+        result.append((mtime, f"{display_base} [{label}]" if label else display_base))
+
+    if dir_mtime_ns is not None:
+        # watch_folders 是自由文本，用户每敲一个新的子目录/数量就多一个永久 key，
+        # 而 max_count=9999 的那一路每个 key 能钉住上万条元组。条目数封顶后整体丢弃——
+        # 缓存本来就只为挡住一秒内的重复调用，重建代价就是一次重扫。
+        if len(_recent_dir_cache) >= 64:
+            _recent_dir_cache.clear()
+        _recent_dir_cache[cache_key] = (dir_mtime_ns, now, result)
+    return result
+
+
 def get_recent_image_files(
     directories: List[Tuple[str, str, int]],   # (sub_folder相对路径, label标记, 最大数量)
     base_root_getter=None,
-    valid_exts: set = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+    valid_exts: set = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"},
+    use_cache: bool = True,
 ) -> List[str]:
     """
     从多个 (子目录 + 标记) 配置中，获取最新的图片文件显示名称列表
@@ -101,14 +208,7 @@ def get_recent_image_files(
                 # 默认当作 output 处理
                 return Path(folder_paths.get_output_directory())
 
-    file_items: List[Tuple[Path, str]] = []  # (绝对路径, 显示名称)
-
-    def is_valid_image(entry: os.DirEntry) -> bool:
-        return (
-            entry.is_file()
-            and not entry.name.startswith('.')
-            and Path(entry.name).suffix.lower() in valid_exts
-        )
+    file_items: List[Tuple[float, str]] = []  # (mtime, 显示名称)
 
     for sub_folder, label, max_count in directories:
         # 确定实际根目录
@@ -119,38 +219,14 @@ def get_recent_image_files(
             logger.warning(f"Invalid dir: {full_dir}")
             continue
 
-        # 复用 os.scandir 返回的 DirEntry 里已缓存的 stat（Windows 上无需额外 syscall），
-        # 避免转成 Path 后对目录内每个文件再各发一次 stat()——目录文件多时这是主要开销。
-        recent_files = []
-        for entry in os.scandir(full_dir):
-            if is_valid_image(entry):
-                recent_files.append((Path(entry.path), entry.stat().st_mtime))
-
-        recent_files.sort(key=lambda t: t[1], reverse=True)
-        recent_files = recent_files[:max_count]
-
-        for path, mtime in recent_files:
-            # 相对于 full_dir 的相对路径
-            rel_path = path.relative_to(full_dir).as_posix()
-
-            # 构建显示名称
-            if sub_folder:
-                display_base = f"{sub_folder}/{rel_path}"
-            else:
-                display_base = rel_path
-
-            if label:
-                display_name = f"{display_base} [{label}]"
-            else:
-                display_name = display_base
-
-            # 携带 mtime，供后面全局排序复用，避免再次 stat
-            file_items.append((path, display_name, mtime))
+        file_items.extend(
+            _list_recent_in_dir(full_dir, sub_folder, label, max_count, valid_exts, use_cache)
+        )
 
     # 全局按修改时间重新排序（复用上面已取到的 mtime）
-    file_items.sort(key=lambda x: x[2], reverse=True)
+    file_items.sort(key=lambda x: x[0], reverse=True)
 
-    return [display_name for _, display_name, _ in file_items]
+    return [display_name for _, display_name in file_items]
 #######################################################################################################################
 # V3 style nodes
 
@@ -273,10 +349,10 @@ class LoadImageFromOutputsPlus(io.ComfyNode):
         )
 
     @staticmethod
-    def get_file_names(sub_folder="") -> List[str]:
+    def get_file_names(sub_folder="", use_cache=True) -> List[str]:
         return get_recent_image_files([
             (sub_folder, "", 9999),  # 無標籤，數量幾乎不限
-        ])
+        ], use_cache=use_cache)
 
     @staticmethod
     def get_image_metadata(image_path):
@@ -515,11 +591,15 @@ class FloatSelector:
 class LoadImageFromOutputPlusV1(nodes.LoadImage):
     @classmethod
     def INPUT_TYPES(cls):
-        file_names = cls.get_file_names()
+        # 不在这里扫目录：下面声明了 remote，列表由前端按需 GET
+        # /slowargo_api/refresh_previews 拉取，内嵌 options 是重复劳动。
+        # 官方 nodes.py 的 LoadImageOutput 就是这么写的——有 remote、不带 options。
+        # 而 INPUT_TYPES 在每次 prompt 校验时都会被调用，这次扫描的结果压根没人读：
+        # 继承自 LoadImage 的 VALIDATE_INPUTS(s, image) 让 execution.py:1033 跳过了
+        # 整段 combo 成员检查，校验只用到输入的名字和类型，不碰 options。
         return {
             "required": {
                 "image": ("COMBO", {
-                    "options":file_names,
                     "image_upload": True,
                     "image_folder": "output",
                     "remote": {
@@ -557,11 +637,11 @@ class LoadImageFromOutputPlusV1(nodes.LoadImage):
         return (output_image, output_mask, file_name, meta_data)
 
     @staticmethod
-    def get_file_names(sub_folder="") -> List[str]:
+    def get_file_names(sub_folder="", use_cache=True) -> List[str]:
         return get_recent_image_files([
             (sub_folder, "", 10),       # output 目录 + sub_folder 前缀，不强制加 [output]
             ("clipspace","input", 3),   # clipspace 固定子目录，加 [input]
-        ])
+        ], use_cache=use_cache)
 
 class LoadRecentImagePlusV1(nodes.LoadImage):
     @classmethod
@@ -609,7 +689,7 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
         return (output_image, output_mask, file_name, meta_data)
 
     @staticmethod
-    def get_file_names(watch_folders="") -> List[str]:
+    def get_file_names(watch_folders="", use_cache=True) -> List[str]:
         default_watch = "[5][input]"
         watch_folders = watch_folders.strip() or default_watch
 
@@ -633,15 +713,12 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
 
             directories.append((sub_folder, folder_type, count))
 
-        return get_recent_image_files(directories)
+        return get_recent_image_files(directories, use_cache=use_cache)
 
     @classmethod
     def IS_CHANGED(s, image,watch_folders=""):
         image_path = folder_paths.get_annotated_filepath(image)
-        m = hashlib.sha256()
-        with open(image_path, 'rb') as f:
-            m.update(f.read())
-        return m.digest().hex()
+        return file_content_fingerprint(image_path)
 
 class RefreshTriggerV1:
     """A remote refresh trigger for LoadRecentImagePlusV1.
@@ -1388,7 +1465,8 @@ async def refresh_previews_api(request):
         success = True
 
         # use get_file_names to get the lates file names
-        file_names = LoadImageFromOutputsPlus.get_file_names(data["input_path"])
+        # 用户手动点刷新时绕过目录缓存，强制重扫
+        file_names = LoadImageFromOutputsPlus.get_file_names(data["input_path"], use_cache=False)
 
         return web.json_response({
             "success": success,
@@ -1413,7 +1491,8 @@ async def refresh_previews_api(request):
 async def refresh_previews_v1_api(request):
     try:
         # use get_file_names to get the lates file names
-        file_names = LoadImageFromOutputPlusV1.get_file_names()
+        # 用户手动点刷新时绕过目录缓存，强制重扫
+        file_names = LoadImageFromOutputPlusV1.get_file_names(use_cache=False)
 
         return web.json_response(file_names)
 
@@ -1432,7 +1511,8 @@ async def refresh_previews_recent_api(request):
         # logger.info(f"[refresh_previews_recent] data: {data}")
 
         # use get_file_names to get the lates file names
-        file_names = LoadRecentImagePlusV1.get_file_names(data["watch_folders"])
+        # 用户手动点刷新时绕过目录缓存，强制重扫
+        file_names = LoadRecentImagePlusV1.get_file_names(data["watch_folders"], use_cache=False)
 
         return web.json_response({
             "success": True,
