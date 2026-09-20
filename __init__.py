@@ -86,9 +86,9 @@ _FINGERPRINT_CHUNK = 64 * 1024
 def file_content_fingerprint(path) -> str:
     """给 IS_CHANGED 用的文件指纹：(size, mtime_ns, 首尾各 64KB 的 sha256)。
 
-    不做整文件哈希：实测 3.6MB 的 PNG 全读约 10.6ms，只读首尾两块约 0.2ms。
+    不做整文件哈希：大图全读比只读首尾两块贵一到两个数量级。
     也不用纯 (mtime_ns, size)：NTFS 时间戳的实际更新粒度远粗于 100ns，
-    实测同一路径背靠背写入两份不同内容会拿到完全相同的 (mtime_ns, size)，
+    同一路径背靠背写入两份不同内容会拿到完全相同的 (mtime_ns, size)，
     而 SaveImageToFileName 正是往固定文件名原地覆盖、再喂给本节点——
     这是本插件明确支持的工作流，纯 stat 指纹会让节点漏掉这次改动。
     注意 NOT_IDEMPOTENT 并不强制重新执行（comfy_execution/caching.py 只是把
@@ -116,8 +116,8 @@ def file_content_fingerprint(path) -> str:
 # 光靠条件 1 不够：原地覆盖同名文件（SaveImageToFileName 就是这么干的）只会改
 # 文件的 mtime，不会改目录的，而缓存里存的 mtime 同时决定了跨目录排序和
 # top-N 的入选，漏判会让刚存的图一直不出现在列表里。TTL 把这种陈旧限死在 1 秒内。
-# 一次 os.stat 约 7us，重扫一个几百文件的目录（clipspace 实测 372 个约 5ms）贵三个
-# 数量级；真正要挡的是 INPUT_TYPES 在同一次 prompt 校验里被连续调用好几次。
+# 单次 os.stat 很便宜，但重扫一个几百文件的目录要贵上三个数量级；真正要挡的是
+# INPUT_TYPES 在同一次 prompt 校验里被连续调用好几次。
 _RECENT_DIR_TTL = 1.0
 _recent_dir_cache: dict = {}
 
@@ -1279,21 +1279,20 @@ class ImageSimilaritySSIM:
 class MaskedColorMatch:
     """基于遮罩外区域的线性色彩回归，校正 inpaint 的 VAE 重建偏差。
 
-    VAE encode/decode 往返带有系统性偏差（实测 Wan2.1 VAE 约 -0.7/255 的整体变暗），
-    这一层偏差与内容无关、全图一致，迭代式修补下会逐轮累积。
+    VAE encode/decode 往返带有系统性偏差，与内容无关、全图一致，迭代式修补下会逐轮累积。
 
     本节点只用遮罩外（内容理论上未被改动）的像素拟合逐通道的 reference = k * image + c，
     再把该变换施加到整张图上。
 
-    作用范围仅限上述 VAE 分量。重绘区内采样器自身还会叠加一层偏移（实测 ΔL* ≈ -2），
-    那部分在遮罩外没有任何可观测样本，本节点无法、也不试图消除它——强行把重绘区均值
-    拉回原图均值会破坏"重绘本来就该改变颜色"的正常情况。
+    作用范围仅限上述 VAE 分量。重绘区内采样器自身还会叠加一层偏移，那部分在遮罩外没有
+    任何可观测样本，本节点无法、也不试图消除它——强行把重绘区均值拉回原图均值会破坏
+    "重绘本来就该改变颜色"的正常情况。
     """
 
     # Guard rails for the per-channel least-squares fit.
     # 样本区纹理太弱时 gain 会被 regression dilution 系统性压低（x 自带 VAE 重建噪声，
     # k → var_true/(var_true+var_noise)），把这种被低估的 k 施加到全图等于压对比度，
-    # 危害远大于它要修的 ~0.7/255。std 低于阈值就降级为纯 offset。
+    # 危害远大于它要修的那点偏移。std 低于阈值就降级为纯 offset。
     MIN_SAMPLE_STD = 0.12          # ≈ 30/255
     MIN_SAMPLE_RATIO = 0.002       # 样本数下限取 max(MIN_SAMPLES, 像素总数 * 该比例)
     MIN_SAMPLES = 1024
