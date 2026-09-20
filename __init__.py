@@ -1376,8 +1376,9 @@ class MaskedColorMatch:
             return torch.ones((batch, height, width), dtype=torch.bool, device=device)
 
         msk = _normalize_mask(mask, height, width, device)
-        # 遮罩边界外仍可能被重绘内容影响：VAE 解码有感受野，mask 缩小时 bilinear
-        # 又是点采样、细羽化带会被跳过。统一用 3x3 max 保守膨胀：宁可少采，不可错采。
+        # mask 缩小时 bilinear 是点采样，细羽化带会被跳过而让重绘像素混进样本池，
+        # 用 3x3 max 保守膨胀挡掉这种漏采。注意它挡不住 VAE 解码感受野造成的
+        # 边界渗透（尺度是 8px 量级），那部分只占样本池极小比例，对均值影响可忽略。
         msk = F.max_pool2d(msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
         return _broadcast_batch(msk, batch, "mask") <= mask_threshold
 
@@ -1429,6 +1430,16 @@ class MaskedColorMatch:
             x_var = ((x_dev * x_dev) * wc).sum(dim=(0, 1)) / sample_count
             y_var = ((y_dev * y_dev) * wc).sum(dim=(0, 1)) / sample_count
             covariance = ((x_dev * y_dev) * wc).sum(dim=(0, 1)) / sample_count
+
+            # 上游任何一个坏像素都会让均值/方差变成 NaN，再逐像素相加就是整图报废
+            if not bool(torch.isfinite(torch.stack([x_mean, y_mean, x_var, y_var, covariance])).all()):
+                logger.warning(
+                    f"[MaskedColorMatch] batch {b}: non-finite statistics in the sample region "
+                    f"(NaN/Inf in image or reference), skipping correction"
+                )
+                corrected[b] = img[b]
+                report_lines.append(f"[{b}] SKIPPED non-finite statistics")
+                continue
 
             x_std = x_var.sqrt()
             unit_gain = torch.ones_like(x_std)
