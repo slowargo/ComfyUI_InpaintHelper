@@ -1276,6 +1276,206 @@ class ImageSimilaritySSIM:
 
         return (similarity, is_similar)
 
+class MaskedColorMatch:
+    """基于遮罩外区域的线性色彩回归，校正 inpaint 的 VAE 重建偏差。
+
+    VAE encode/decode 往返带有系统性偏差（实测 Wan2.1 VAE 约 -0.7/255 的整体变暗），
+    这一层偏差与内容无关、全图一致，迭代式修补下会逐轮累积。
+
+    本节点只用遮罩外（内容理论上未被改动）的像素拟合逐通道的 reference = k * image + c，
+    再把该变换施加到整张图上。
+
+    作用范围仅限上述 VAE 分量。重绘区内采样器自身还会叠加一层偏移（实测 ΔL* ≈ -2），
+    那部分在遮罩外没有任何可观测样本，本节点无法、也不试图消除它——强行把重绘区均值
+    拉回原图均值会破坏"重绘本来就该改变颜色"的正常情况。
+    """
+
+    # Guard rails for the per-channel least-squares fit.
+    # 样本区纹理太弱时 gain 会被 regression dilution 系统性压低（x 自带 VAE 重建噪声，
+    # k → var_true/(var_true+var_noise)），把这种被低估的 k 施加到全图等于压对比度，
+    # 危害远大于它要修的 ~0.7/255。std 低于阈值就降级为纯 offset。
+    MIN_SAMPLE_STD = 0.12          # ≈ 30/255
+    MIN_SAMPLE_RATIO = 0.002       # 样本数下限取 max(MIN_SAMPLES, 像素总数 * 该比例)
+    MIN_SAMPLES = 1024
+    GAIN_LIMITS = (0.9, 1.1)
+    EPS = 1e-12
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE", {"tooltip": "The VAE-decoded inpaint result to correct."}),
+                "reference": ("IMAGE", {"tooltip": "The original image before VAE encode, same framing as image."}),
+                "mode": (["offset_only", "gain_offset"], {
+                    "default": "offset_only",
+                    "tooltip": "offset_only fits a per-channel constant shift (recommended, matches the measured VAE bias). gain_offset also fits a slope, which needs a well-textured sample region to be reliable."
+                }),
+                "strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Blends the correction: 0 leaves the image untouched, 1 applies the full fit."
+                }),
+                "mask_threshold": ("FLOAT", {
+                    "default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Only pixels whose mask value is at or below this are used to fit the correction. Keep it low so that repainted pixels never enter the fit."
+                }),
+            },
+            "optional": {
+                "mask": ("MASK", {"tooltip": "The inpaint mask. Without it the fit uses the whole image, which lets repainted content distort the result."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "report")
+    FUNCTION = "match_color"
+    CATEGORY = "Slowargo"
+    DESCRIPTION = "Remove the VAE roundtrip color drift from an inpaint result by fitting a per-channel linear correction on the pixels outside the mask, then applying it to the whole image."
+
+    @staticmethod
+    def _resize_to(tensor_bchw: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
+        if tensor_bchw.shape[-2:] == size:
+            return tensor_bchw
+        return F.interpolate(tensor_bchw, size=size, mode="bilinear", align_corners=False)
+
+    @staticmethod
+    def _broadcast_batch(tensor: torch.Tensor, batch: int, name: str) -> torch.Tensor:
+        if tensor.shape[0] == batch:
+            return tensor
+        if tensor.shape[0] == 1:
+            return tensor.expand(batch, *tensor.shape[1:])
+        raise ValueError(f"Batch size mismatch: image batch={batch}, {name} batch={tensor.shape[0]}")
+
+    def _sample_region(self, mask, batch, height, width, mask_threshold, device):
+        """遮罩外像素的选取。返回 [B,H,W] 的 bool。"""
+        if mask is None:
+            logger.warning(
+                "[MaskedColorMatch] no mask connected, fitting on the whole image - "
+                "repainted content will distort the correction"
+            )
+            return torch.ones((batch, height, width), dtype=torch.bool, device=device)
+
+        msk = mask.float().to(device)
+        if msk.ndim == 2:
+            msk = msk.unsqueeze(0)
+        elif msk.ndim == 4:
+            # [B,1,H,W] 或 [B,H,W,1] 都归一到 [B,H,W]
+            if msk.shape[1] == 1:
+                msk = msk.squeeze(1)
+            elif msk.shape[-1] == 1:
+                msk = msk.squeeze(-1)
+        if msk.ndim != 3:
+            raise ValueError(f"Expected MASK tensor with 3 dims [B,H,W], got shape: {tuple(mask.shape)}")
+
+        if msk.shape[1:3] != (height, width):
+            msk = self._resize_to(msk.unsqueeze(1), (height, width)).squeeze(1)
+        # 遮罩边界外仍可能被重绘内容影响：VAE 解码有感受野，mask 缩小时 bilinear
+        # 又是点采样、细羽化带会被跳过。统一用 3x3 max 保守膨胀：宁可少采，不可错采。
+        msk = F.max_pool2d(msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
+        return self._broadcast_batch(msk, batch, "mask") <= mask_threshold
+
+    def match_color(self, image, reference, mode="offset_only", strength=1.0, mask_threshold=0.05, mask=None):
+        if image.ndim != 4:
+            raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
+
+        img = image.float()
+        batch, height, width, channels = img.shape
+
+        ref = reference.float().to(img.device)
+        if ref.ndim != 4:
+            raise ValueError(f"Expected reference IMAGE with 4 dims [B,H,W,C], got shape: {tuple(ref.shape)}")
+        if ref.shape[-1] != channels:
+            raise ValueError(f"Channel mismatch: image has {channels}, reference has {ref.shape[-1]}")
+        if ref.shape[1:3] != (height, width):
+            logger.warning(
+                f"[MaskedColorMatch] reference size {tuple(ref.shape[1:3])} != image size {(height, width)}, "
+                f"resizing reference - the interpolation blur it adds will bias the fit"
+            )
+            ref = self._resize_to(ref.permute(0, 3, 1, 2), (height, width)).permute(0, 2, 3, 1)
+        ref = self._broadcast_batch(ref, batch, "reference")
+
+        sample_region = self._sample_region(mask, batch, height, width, mask_threshold, img.device)
+        min_samples = max(self.MIN_SAMPLES, int(height * width * self.MIN_SAMPLE_RATIO))
+        gain_lo, gain_hi = self.GAIN_LIMITS
+
+        corrected = torch.empty_like(img)
+        report_lines = [f"mode={mode} strength={strength:.2f} mask_threshold={mask_threshold:.2f}"]
+
+        for b in range(batch):
+            weight = sample_region[b].to(img.dtype)
+            sample_count = int(weight.sum().item())
+            if sample_count < min_samples:
+                logger.warning(
+                    f"[MaskedColorMatch] batch {b}: only {sample_count} usable pixels "
+                    f"(need {min_samples}, mask_threshold={mask_threshold}), skipping correction"
+                )
+                corrected[b] = img[b]
+                report_lines.append(f"[{b}] SKIPPED n={sample_count} < {min_samples}")
+                continue
+
+            # 逐通道加权统计，一次算完所有通道，避免 per-channel 的布尔 gather
+            wc = weight.unsqueeze(-1)
+            x, y = img[b], ref[b]
+            x_mean = (x * wc).sum(dim=(0, 1)) / sample_count
+            y_mean = (y * wc).sum(dim=(0, 1)) / sample_count
+            x_dev, y_dev = x - x_mean, y - y_mean
+            x_var = ((x_dev * x_dev) * wc).sum(dim=(0, 1)) / sample_count
+            y_var = ((y_dev * y_dev) * wc).sum(dim=(0, 1)) / sample_count
+            covariance = ((x_dev * y_dev) * wc).sum(dim=(0, 1)) / sample_count
+
+            x_std = x_var.sqrt()
+            unit_gain = torch.ones_like(x_std)
+            if mode == "gain_offset":
+                fit_ok = x_std >= self.MIN_SAMPLE_STD
+                raw_gain = covariance / x_var.clamp_min(self.EPS)
+                bounded = raw_gain.clamp(gain_lo, gain_hi)
+                gain = torch.where(fit_ok, bounded, unit_gain)
+                was_clamped = fit_ok & (bounded != raw_gain)
+                if not bool(fit_ok.all()):
+                    logger.warning(
+                        f"[MaskedColorMatch] batch {b}: sample region too flat "
+                        f"(std={[round(v * 255.0, 2) for v in x_std.tolist()]}/255 < "
+                        f"{self.MIN_SAMPLE_STD * 255.0:.0f}/255), falling back to offset_only on those channels"
+                    )
+                if bool(was_clamped.any()):
+                    logger.warning(
+                        f"[MaskedColorMatch] batch {b}: gain clamped to {self.GAIN_LIMITS} "
+                        f"(raw={[round(v, 4) for v in raw_gain.tolist()]}), the fit is not trustworthy"
+                    )
+            else:
+                gain = unit_gain
+                was_clamped = torch.zeros_like(unit_gain, dtype=torch.bool)
+
+            offset = y_mean - gain * x_mean
+            # strength 插值：out = (1-s)*img + s*(k*img+c)
+            gain_eff = 1.0 + (gain - 1.0) * strength
+            offset_eff = offset * strength
+            # clamp 会削掉本该提亮的高光，8bit 管线下无解，多轮迭代后高光会略微压平
+            corrected[b] = (x * gain_eff + offset_eff).clamp_(0.0, 1.0)
+
+            # 诊断量：均值处的修正是拟合的恒等式（直线必过样本均值点），说明不了任何问题，
+            # 所以额外报 ±2σ 两端的修正量——gain 一旦失真，这两个数会立刻劈叉。
+            lo = (x_mean - 2.0 * x_std).clamp(0.0, 1.0)
+            hi = (x_mean + 2.0 * x_std).clamp(0.0, 1.0)
+            stats = torch.stack([
+                gain,
+                offset * 255.0,
+                x_std * 255.0,
+                (covariance * covariance) / (x_var * y_var).clamp_min(self.EPS),
+                (gain_eff * lo + offset_eff - lo) * 255.0,
+                (gain_eff * hi + offset_eff - hi) * 255.0,
+                was_clamped.to(x_std.dtype),
+            ]).t().tolist()
+            channel_reports = [
+                f"k={k:.5f} c={c:+.3f} std={s:.1f} R2={r2:.4f} @-2s={s_lo:+.2f} @+2s={s_hi:+.2f}"
+                + (" CLAMPED" if clamped else "")
+                for k, c, s, r2, s_lo, s_hi, clamped in stats
+            ]
+            report_lines.append(f"[{b}] n={sample_count} " + " | ".join(channel_reports))
+
+        report = "\n".join(report_lines)
+        logger.debug(f"[MaskedColorMatch]\n{report}")
+        return (corrected, report)
+
+
 class RunButtonNode:
     def __init__(self):
         pass
@@ -1628,6 +1828,7 @@ NODE_CLASS_MAPPINGS = {
     "ServerFileTransfer": ServerFileTransfer,
     "RefreshTriggerV1": RefreshTriggerV1,
     "ClearHistoryNode": ClearHistoryNode,
+    "MaskedColorMatch": MaskedColorMatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1645,4 +1846,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ServerFileTransfer": "Server File Transfer",
     "RefreshTriggerV1": "Refresh Trigger",
     "ClearHistoryNode": "Clear History",
+    "MaskedColorMatch": "Masked Color Match (Inpaint Drift Fix)",
 }
