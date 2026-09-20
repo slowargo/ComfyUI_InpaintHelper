@@ -1522,10 +1522,6 @@ class InpaintRegionColorFix:
     # 即使在很小的区域上也是如此。区域越小，局部测量相对全局常数的优势反而越大，
     # 所以这里不该有一个会把小重绘挡在外面的门槛。
     MIN_INSIDE_SAMPLES = 64
-    # Lab 单位。判据取 delta_in 超出 delta_out 的部分：delta_in 自身含全局 VAE 偏置，
-    # 上游没接 MaskedColorMatch 时直接拿它比会误报。超过这个量多半是真实内容变化
-    # 而不是漂移，出声提醒，但不改变行为。
-    LOUD_DELTA = 10.0
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1558,6 +1554,10 @@ class InpaintRegionColorFix:
                     "default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01,
                     "tooltip": "Mask values at or above this define the repainted core, whose baseline shift is an assumption. A mask whose peak never reaches this value gets no inside correction - which is correct, since such a mask barely repaints anything."
                 }),
+                "max_excess": ("FLOAT", {
+                    "default": 8.0, "min": 0.0, "max": 100.0, "step": 0.5,
+                    "tooltip": "Cap, in Lab units, on how far the repainted core's baseline may sit from the outside one; 0 disables the cap. Drift alone stays well inside it, so the cap only binds when the repaint really changed the content - it then limits the damage instead of letting the correction undo that change. For heavy content replacement, inside_source=manual is still better."
+                }),
             },
         }
 
@@ -1576,7 +1576,8 @@ class InpaintRegionColorFix:
         return "L*={:+.3f} a*={:+.3f} b*={:+.3f}".format(*delta.tolist())
 
     def fix_region(self, image, reference, mask, components="luminance", inside_source="fit",
-                   inside_offset_l=0.0, strength=1.0, outside_threshold=0.05, inside_threshold=0.95):
+                   inside_offset_l=0.0, strength=1.0, outside_threshold=0.05, inside_threshold=0.95,
+                   max_excess=8.0):
         if image.ndim != 4:
             raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
         if image.shape[-1] != 3:
@@ -1672,17 +1673,22 @@ class InpaintRegionColorFix:
                 else:
                     delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
                                 - self._masked_mean(lab_img[b], inside[b], n_in))
-                    # 告警看的是未经 components 过滤的原始偏差：luminance 模式下纯色相
-                    # 替换的 ΔL* 很小，只有 a*/b* 会暴露「假设不成立」，过滤后就永远
-                    # 不告警了。
+                    # 判据取 delta_in 超出 delta_out 的部分：delta_in 自身含全局 VAE
+                    # 偏置，上游没接 MaskedColorMatch 时直接拿它比会误报。
+                    # 也不受 components 过滤——luminance 模式下纯色相替换的 ΔL* 很小，
+                    # 只有 a*/b* 会暴露「假设不成立」，过滤后就永远看不到了。
                     excess = delta_in - delta_out
-                    if bool((excess.abs() > self.LOUD_DELTA).any()):
+                    if max_excess > 0 and bool((excess.abs() > max_excess).any()):
                         logger.warning(
                             f"[InpaintRegionColorFix] batch {b}: inside baseline exceeds the outside one by "
-                            f"{[round(v, 2) for v in excess.tolist()]}, over {self.LOUD_DELTA} Lab units - "
-                            f"this is more likely a real content change than drift, consider lowering strength"
+                            f"{[round(v, 2) for v in excess.tolist()]}, over max_excess={max_excess} - "
+                            f"this is more likely a real content change than drift, capping the correction. "
+                            f"Use inside_source=manual with a calibrated offset for heavy content replacement."
                         )
-                        flags.append("LOUD_DELTA")
+                        # 限幅而不是放弃：退回 delta_out 等于主动接受一整个 drift 量的
+                        # 偏差，而封顶只是不让校正跟着内容变化跑远，方向仍然是对的。
+                        delta_in = delta_out + excess.clamp(-max_excess, max_excess)
+                        flags.append("CLAMPED")
 
             # 上游任何一个坏像素都会让均值变成 NaN，再逐像素相加就是整图报废
             if not bool(torch.isfinite(torch.stack([delta_out, delta_in])).all()):
