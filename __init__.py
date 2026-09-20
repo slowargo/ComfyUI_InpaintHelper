@@ -1517,13 +1517,15 @@ class InpaintRegionColorFix:
     # 遮罩外总体是整张图的大头，下限跟 MaskedColorMatch 对齐。
     MIN_OUTSIDE_SAMPLES = 1024
     MIN_OUTSIDE_RATIO = 0.002
-    # 重绘核心天生就小（小笔刷修补可能只有几百像素），下限必须比遮罩外低得多，否则
-    # 本该生效的场景会被跳过。这个量级够用是因为估计量是配对差分（同一批像素上
-    # reference 减 image），内容方差会抵消，标准误只取决于逐像素差值的离散度，远小于
-    # 图像自身的方差；再往下降就会被空间自相关放大到与待修偏移同量级。
-    MIN_INSIDE_SAMPLES = 256
-    # Lab 单位。遮罩内基准差超过这个量，多半是真实内容变化而不是漂移，出声提醒。
-    LOUD_DELTA = 5.0
+    # 核心区下限只做数值保护，不做统计准入。退回遮罩外基准不是中性的「更安全」，
+    # 它是一个已知偏了整整一个 drift 量的选择；而局部估计的样本外误差远小于此，
+    # 即使在很小的区域上也是如此。区域越小，局部测量相对全局常数的优势反而越大，
+    # 所以这里不该有一个会把小重绘挡在外面的门槛。
+    MIN_INSIDE_SAMPLES = 64
+    # Lab 单位。判据取 delta_in 超出 delta_out 的部分：delta_in 自身含全局 VAE 偏置，
+    # 上游没接 MaskedColorMatch 时直接拿它比会误报。超过这个量多半是真实内容变化
+    # 而不是漂移，出声提醒，但不改变行为。
+    LOUD_DELTA = 10.0
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1660,26 +1662,27 @@ class InpaintRegionColorFix:
                 delta_in = torch.zeros_like(keep)
             else:
                 n_in = int(inside[b].sum().item())
-                if n_in >= self.MIN_INSIDE_SAMPLES:
-                    delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
-                                - self._masked_mean(lab_img[b], inside[b], n_in))
-                    # 告警看的是未经 components 过滤的原始偏差：luminance 模式下纯色相
-                    # 替换的 ΔL* 很小，只有 a*/b* 会暴露「假设不成立」，过滤后就永远
-                    # 不告警了。
-                    if bool((delta_in.abs() > self.LOUD_DELTA).any()):
-                        logger.warning(
-                            f"[InpaintRegionColorFix] batch {b}: inside baseline shift "
-                            f"{[round(v, 2) for v in delta_in.tolist()]} exceeds {self.LOUD_DELTA} Lab units - "
-                            f"this is more likely a real content change than drift, consider lowering strength"
-                        )
-                        flags.append("LOUD_DELTA")
-                else:
+                if n_in < self.MIN_INSIDE_SAMPLES:
                     logger.warning(
                         f"[InpaintRegionColorFix] batch {b}: repainted core too small "
                         f"({n_in} < {self.MIN_INSIDE_SAMPLES}), falling back to the outside baseline"
                     )
                     delta_in = delta_out
                     flags.append("INSIDE_FALLBACK")
+                else:
+                    delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
+                                - self._masked_mean(lab_img[b], inside[b], n_in))
+                    # 告警看的是未经 components 过滤的原始偏差：luminance 模式下纯色相
+                    # 替换的 ΔL* 很小，只有 a*/b* 会暴露「假设不成立」，过滤后就永远
+                    # 不告警了。
+                    excess = delta_in - delta_out
+                    if bool((excess.abs() > self.LOUD_DELTA).any()):
+                        logger.warning(
+                            f"[InpaintRegionColorFix] batch {b}: inside baseline exceeds the outside one by "
+                            f"{[round(v, 2) for v in excess.tolist()]}, over {self.LOUD_DELTA} Lab units - "
+                            f"this is more likely a real content change than drift, consider lowering strength"
+                        )
+                        flags.append("LOUD_DELTA")
 
             # 上游任何一个坏像素都会让均值变成 NaN，再逐像素相加就是整图报废
             if not bool(torch.isfinite(torch.stack([delta_out, delta_in])).all()):
