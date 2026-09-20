@@ -1276,6 +1276,43 @@ class ImageSimilaritySSIM:
 
         return (similarity, is_similar)
 
+def _resize_bchw_to(tensor_bchw: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
+    """把 [B,C,H,W] 缩放到目标尺寸；尺寸已一致时原样返回，不产生拷贝。"""
+    if tensor_bchw.shape[-2:] == size:
+        return tensor_bchw
+    return F.interpolate(tensor_bchw, size=size, mode="bilinear", align_corners=False)
+
+
+def _broadcast_batch(tensor: torch.Tensor, batch: int, name: str) -> torch.Tensor:
+    """batch 为 1 时零拷贝展开到目标 batch；既不为 1 也不匹配则报错。"""
+    if tensor.shape[0] == batch:
+        return tensor
+    if tensor.shape[0] == 1:
+        return tensor.expand(batch, *tensor.shape[1:])
+    raise ValueError(f"Batch size mismatch: image batch={batch}, {name} batch={tensor.shape[0]}")
+
+
+def _normalize_mask(mask: torch.Tensor, height: int, width: int, device) -> torch.Tensor:
+    """把常见形状的 MASK 归一成 [B,H,W]、值域 [0,1]、对齐到目标尺寸。
+
+    不做 batch 广播：调用方通常要先做形态学再广播，否则会把展开后的副本实体化。
+    """
+    msk = mask.float().to(device)
+    if msk.ndim == 2:
+        msk = msk.unsqueeze(0)
+    elif msk.ndim == 4:
+        # [B,1,H,W] 或 [B,H,W,1] 都归一到 [B,H,W]
+        if msk.shape[1] == 1:
+            msk = msk.squeeze(1)
+        elif msk.shape[-1] == 1:
+            msk = msk.squeeze(-1)
+    if msk.ndim != 3:
+        raise ValueError(f"Expected MASK tensor with 3 dims [B,H,W], got shape: {tuple(mask.shape)}")
+    if msk.shape[1:3] != (height, width):
+        msk = _resize_bchw_to(msk.unsqueeze(1), (height, width)).squeeze(1)
+    return msk.clamp(0.0, 1.0)
+
+
 class MaskedColorMatch:
     """基于遮罩外区域的线性色彩回归，校正 inpaint 的 VAE 重建偏差。
 
@@ -1329,20 +1366,6 @@ class MaskedColorMatch:
     CATEGORY = "Slowargo"
     DESCRIPTION = "Remove the VAE roundtrip color drift from an inpaint result by fitting a per-channel linear correction on the pixels outside the mask, then applying it to the whole image."
 
-    @staticmethod
-    def _resize_to(tensor_bchw: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
-        if tensor_bchw.shape[-2:] == size:
-            return tensor_bchw
-        return F.interpolate(tensor_bchw, size=size, mode="bilinear", align_corners=False)
-
-    @staticmethod
-    def _broadcast_batch(tensor: torch.Tensor, batch: int, name: str) -> torch.Tensor:
-        if tensor.shape[0] == batch:
-            return tensor
-        if tensor.shape[0] == 1:
-            return tensor.expand(batch, *tensor.shape[1:])
-        raise ValueError(f"Batch size mismatch: image batch={batch}, {name} batch={tensor.shape[0]}")
-
     def _sample_region(self, mask, batch, height, width, mask_threshold, device):
         """遮罩外像素的选取。返回 [B,H,W] 的 bool。"""
         if mask is None:
@@ -1352,24 +1375,11 @@ class MaskedColorMatch:
             )
             return torch.ones((batch, height, width), dtype=torch.bool, device=device)
 
-        msk = mask.float().to(device)
-        if msk.ndim == 2:
-            msk = msk.unsqueeze(0)
-        elif msk.ndim == 4:
-            # [B,1,H,W] 或 [B,H,W,1] 都归一到 [B,H,W]
-            if msk.shape[1] == 1:
-                msk = msk.squeeze(1)
-            elif msk.shape[-1] == 1:
-                msk = msk.squeeze(-1)
-        if msk.ndim != 3:
-            raise ValueError(f"Expected MASK tensor with 3 dims [B,H,W], got shape: {tuple(mask.shape)}")
-
-        if msk.shape[1:3] != (height, width):
-            msk = self._resize_to(msk.unsqueeze(1), (height, width)).squeeze(1)
+        msk = _normalize_mask(mask, height, width, device)
         # 遮罩边界外仍可能被重绘内容影响：VAE 解码有感受野，mask 缩小时 bilinear
         # 又是点采样、细羽化带会被跳过。统一用 3x3 max 保守膨胀：宁可少采，不可错采。
         msk = F.max_pool2d(msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
-        return self._broadcast_batch(msk, batch, "mask") <= mask_threshold
+        return _broadcast_batch(msk, batch, "mask") <= mask_threshold
 
     def match_color(self, image, reference, mode="offset_only", strength=1.0, mask_threshold=0.05, mask=None):
         if image.ndim != 4:
@@ -1388,8 +1398,8 @@ class MaskedColorMatch:
                 f"[MaskedColorMatch] reference size {tuple(ref.shape[1:3])} != image size {(height, width)}, "
                 f"resizing reference - the interpolation blur it adds will bias the fit"
             )
-            ref = self._resize_to(ref.permute(0, 3, 1, 2), (height, width)).permute(0, 2, 3, 1)
-        ref = self._broadcast_batch(ref, batch, "reference")
+            ref = _resize_bchw_to(ref.permute(0, 3, 1, 2), (height, width)).permute(0, 2, 3, 1)
+        ref = _broadcast_batch(ref, batch, "reference")
 
         sample_region = self._sample_region(mask, batch, height, width, mask_threshold, img.device)
         min_samples = max(self.MIN_SAMPLES, int(height * width * self.MIN_SAMPLE_RATIO))
