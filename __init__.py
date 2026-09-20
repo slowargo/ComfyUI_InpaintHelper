@@ -1506,6 +1506,9 @@ class InpaintRegionColorFix:
     默认只校正亮度：亮度损失跨内容、跨采样器都表现为同向的系统性偏移，而色度偏移的方向
     随内容变化，与真实重绘意图分不开，一并拉回就会撤销重绘本该带来的颜色变化。
 
+    核心区基准默认取均值：只做细化时它更准，而它「跟随内容变化」的风险已经由 max_excess
+    封顶。区域可能被大面积重绘时改用中位数，它不会被那部分带跑。
+
     高 denoise 的内容替换场景上述假设不成立（重绘本来就该改变颜色）。那种情况下把
     inside_source 切到 manual：改用手工标定的常量偏移，完全不看重绘区内容，于是假设从
     「内容属性」变成「管道属性」——代价是换一组 模型/采样器/步数/denoise 就要重新标定。
@@ -1558,6 +1561,10 @@ class InpaintRegionColorFix:
                     "default": 8.0, "min": 0.0, "max": 100.0, "step": 0.5,
                     "tooltip": "Cap, in Lab units, on how far the repainted core's baseline may sit from the outside one; 0 disables the cap. Drift alone stays well inside it, so the cap only binds when the repaint really changed the content - it then limits the damage instead of letting the correction undo that change. For heavy content replacement, inside_source=manual is still better."
                 }),
+                "estimator": (["mean", "median"], {
+                    "default": "mean",
+                    "tooltip": "How the repainted core's baseline is summarised. mean is marginally more accurate when the repaint only refined detail, but it tracks any real content change one-for-one and is unbounded. median gives that up for a small, fixed cost and stays close to the drift even when part of the region was genuinely repainted. Only affects the core - the outside baseline always uses the mean, where there is no content change to be robust against."
+                }),
             },
         }
 
@@ -1572,12 +1579,18 @@ class InpaintRegionColorFix:
         return (lab_hwc * selection.unsqueeze(-1)).sum(dim=(0, 1)) / count
 
     @staticmethod
+    def _masked_median(diff_hwc: torch.Tensor, selection: torch.Tensor) -> torch.Tensor:
+        # 必须是「逐像素差值的中位数」，不能是「两个中位数之差」——后者不再是配对
+        # 估计量，内容方差不会抵消。
+        return diff_hwc[selection].median(dim=0).values
+
+    @staticmethod
     def _fmt_delta(delta: torch.Tensor) -> str:
         return "L*={:+.3f} a*={:+.3f} b*={:+.3f}".format(*delta.tolist())
 
     def fix_region(self, image, reference, mask, components="luminance", inside_source="fit",
                    inside_offset_l=0.0, strength=1.0, outside_threshold=0.05, inside_threshold=0.95,
-                   max_excess=8.0):
+                   max_excess=8.0, estimator="mean"):
         if image.ndim != 4:
             raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
         if image.shape[-1] != 3:
@@ -1638,9 +1651,10 @@ class InpaintRegionColorFix:
         min_outside = max(self.MIN_OUTSIDE_SAMPLES, int(height * width * self.MIN_OUTSIDE_RATIO))
 
         lab_out = torch.empty_like(lab_img)
-        report_lines = [f"components={components} inside_source={inside_source} "
+        report_lines = [f"components={components} inside_source={inside_source} estimator={estimator} "
                         f"inside_offset_l={inside_offset_l:+.2f} strength={strength:.2f} "
-                        f"outside<={outside_threshold:.2f} inside>={inside_threshold:.2f}"]
+                        f"outside<={outside_threshold:.2f} inside>={inside_threshold:.2f} "
+                        f"max_excess={max_excess:.1f}"]
 
         for b in range(batch):
             n_out = int(outside[b].sum().item())
@@ -1671,8 +1685,11 @@ class InpaintRegionColorFix:
                     delta_in = delta_out
                     flags.append("INSIDE_FALLBACK")
                 else:
-                    delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
-                                - self._masked_mean(lab_img[b], inside[b], n_in))
+                    if estimator == "median":
+                        delta_in = self._masked_median(lab_ref[b] - lab_img[b], inside[b])
+                    else:
+                        delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
+                                    - self._masked_mean(lab_img[b], inside[b], n_in))
                     # 判据取 delta_in 超出 delta_out 的部分：delta_in 自身含全局 VAE
                     # 偏置，上游没接 MaskedColorMatch 时直接拿它比会误报。
                     # 也不受 components 过滤——luminance 模式下纯色相替换的 ΔL* 很小，
