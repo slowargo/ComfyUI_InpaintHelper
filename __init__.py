@@ -1506,9 +1506,12 @@ class InpaintRegionColorFix:
     默认只校正亮度：亮度损失跨内容、跨采样器都表现为同向的系统性偏移，而色度偏移的方向
     随内容变化，与真实重绘意图分不开，一并拉回就会撤销重绘本该带来的颜色变化。
 
-    高 denoise 的内容替换场景上述假设不成立（重绘本来就该改变颜色），那种情况下应调低
-    strength 或不用本节点。校正量按遮罩值插值，与偏移量随遮罩强度递增的实际趋势同向，
-    羽化带不会被过校正，也不会引入新的接缝。
+    高 denoise 的内容替换场景上述假设不成立（重绘本来就该改变颜色）。那种情况下把
+    inside_source 切到 manual：改用手工标定的常量偏移，完全不看重绘区内容，于是假设从
+    「内容属性」变成「管道属性」——代价是换一组 模型/采样器/步数/denoise 就要重新标定。
+
+    校正量按遮罩值插值，与偏移量随遮罩强度递增的实际趋势同向，羽化带不会被过校正，
+    也不会引入新的接缝。
     """
 
     # 遮罩外总体是整张图的大头，下限跟 MaskedColorMatch 对齐。
@@ -1532,6 +1535,14 @@ class InpaintRegionColorFix:
                 "components": (["luminance", "luminance_and_chroma"], {
                     "default": "luminance",
                     "tooltip": "luminance shifts L* only, so hue and saturation are left alone except where the shift pushes a pixel out of gamut - the safe default, since L* drift is the only part that measures as systematic. luminance_and_chroma also pulls a*/b* back, which fixes colour casts but undoes intentional colour changes in the repainted area."
+                }),
+                "inside_source": (["fit", "manual"], {
+                    "default": "fit",
+                    "tooltip": "fit measures the repainted core's baseline from the image, which assumes repainting should not change the region's mean. manual ignores the core entirely and uses inside_offset_l as the baseline shift, so it never fights an intentional colour change - but it has to be calibrated per model/sampler/steps/denoise."
+                }),
+                "inside_offset_l": ("FLOAT", {
+                    "default": 0.0, "min": -50.0, "max": 50.0, "step": 0.1,
+                    "tooltip": "Baseline shift for the repainted core, in Lab L* units; positive brightens. Added on top of the measured shift in fit mode, used as the whole shift in manual mode."
                 }),
                 "strength": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
@@ -1562,8 +1573,8 @@ class InpaintRegionColorFix:
     def _fmt_delta(delta: torch.Tensor) -> str:
         return "L*={:+.3f} a*={:+.3f} b*={:+.3f}".format(*delta.tolist())
 
-    def fix_region(self, image, reference, mask, components="luminance", strength=1.0,
-                   outside_threshold=0.05, inside_threshold=0.95):
+    def fix_region(self, image, reference, mask, components="luminance", inside_source="fit",
+                   inside_offset_l=0.0, strength=1.0, outside_threshold=0.05, inside_threshold=0.95):
         if image.ndim != 4:
             raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
         if image.shape[-1] != 3:
@@ -1604,9 +1615,14 @@ class InpaintRegionColorFix:
         # 腐蚀后再取阈，避免过渡带同时混进两边。ramp 用的是未经形态学的原始遮罩，
         # 所以核心边缘会欠校正约一格、外部边缘会渗入约一格，量级可忽略。
         grown = F.max_pool2d(msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
-        shrunk = -F.max_pool2d(-msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
         outside = _broadcast_batch(grown <= outside_threshold, batch, "mask")
-        inside = _broadcast_batch(shrunk >= inside_threshold, batch, "mask")
+        manual_inside = inside_source == "manual"
+        if manual_inside:
+            # 不看重绘区内容，核心区总体连算都不用算
+            inside = None
+        else:
+            shrunk = -F.max_pool2d(-msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
+            inside = _broadcast_batch(shrunk >= inside_threshold, batch, "mask")
         msk = _broadcast_batch(msk, batch, "mask")
 
         lab_img = kornia.color.rgb_to_lab(img.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
@@ -1615,15 +1631,16 @@ class InpaintRegionColorFix:
         chroma = components == "luminance_and_chroma"
         keep = torch.tensor([1.0, 1.0, 1.0] if chroma else [1.0, 0.0, 0.0],
                             dtype=lab_img.dtype, device=lab_img.device)
+        offset = torch.tensor([inside_offset_l, 0.0, 0.0], dtype=lab_img.dtype, device=lab_img.device)
         min_outside = max(self.MIN_OUTSIDE_SAMPLES, int(height * width * self.MIN_OUTSIDE_RATIO))
 
         lab_out = torch.empty_like(lab_img)
-        report_lines = [f"components={components} strength={strength:.2f} "
+        report_lines = [f"components={components} inside_source={inside_source} "
+                        f"inside_offset_l={inside_offset_l:+.2f} strength={strength:.2f} "
                         f"outside<={outside_threshold:.2f} inside>={inside_threshold:.2f}"]
 
         for b in range(batch):
             n_out = int(outside[b].sum().item())
-            n_in = int(inside[b].sum().item())
             flags = []
 
             if n_out >= min_outside:
@@ -1637,25 +1654,32 @@ class InpaintRegionColorFix:
                 delta_out = torch.zeros_like(keep)
                 flags.append("OUTSIDE_ZEROED")
 
-            if n_in >= self.MIN_INSIDE_SAMPLES:
-                delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
-                            - self._masked_mean(lab_img[b], inside[b], n_in))
-                # 告警看的是未经 components 过滤的原始偏差：luminance 模式下纯色相替换
-                # 的 ΔL* 很小，只有 a*/b* 会暴露「假设不成立」，过滤后就永远不告警了。
-                if bool((delta_in.abs() > self.LOUD_DELTA).any()):
-                    logger.warning(
-                        f"[InpaintRegionColorFix] batch {b}: inside baseline shift "
-                        f"{[round(v, 2) for v in delta_in.tolist()]} exceeds {self.LOUD_DELTA} Lab units - "
-                        f"this is more likely a real content change than drift, consider lowering strength"
-                    )
-                    flags.append("LOUD_DELTA")
+            if manual_inside:
+                # 基准完全由 inside_offset_l 给出，它在下面统一加上，这里先置零
+                n_in = "manual"
+                delta_in = torch.zeros_like(keep)
             else:
-                logger.warning(
-                    f"[InpaintRegionColorFix] batch {b}: repainted core too small "
-                    f"({n_in} < {self.MIN_INSIDE_SAMPLES}), falling back to the outside baseline"
-                )
-                delta_in = delta_out
-                flags.append("INSIDE_FALLBACK")
+                n_in = int(inside[b].sum().item())
+                if n_in >= self.MIN_INSIDE_SAMPLES:
+                    delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
+                                - self._masked_mean(lab_img[b], inside[b], n_in))
+                    # 告警看的是未经 components 过滤的原始偏差：luminance 模式下纯色相
+                    # 替换的 ΔL* 很小，只有 a*/b* 会暴露「假设不成立」，过滤后就永远
+                    # 不告警了。
+                    if bool((delta_in.abs() > self.LOUD_DELTA).any()):
+                        logger.warning(
+                            f"[InpaintRegionColorFix] batch {b}: inside baseline shift "
+                            f"{[round(v, 2) for v in delta_in.tolist()]} exceeds {self.LOUD_DELTA} Lab units - "
+                            f"this is more likely a real content change than drift, consider lowering strength"
+                        )
+                        flags.append("LOUD_DELTA")
+                else:
+                    logger.warning(
+                        f"[InpaintRegionColorFix] batch {b}: repainted core too small "
+                        f"({n_in} < {self.MIN_INSIDE_SAMPLES}), falling back to the outside baseline"
+                    )
+                    delta_in = delta_out
+                    flags.append("INSIDE_FALLBACK")
 
             # 上游任何一个坏像素都会让均值变成 NaN，再逐像素相加就是整图报废
             if not bool(torch.isfinite(torch.stack([delta_out, delta_in])).all()):
@@ -1667,8 +1691,9 @@ class InpaintRegionColorFix:
                 report_lines.append(f"[{b}] SKIPPED non-finite statistics")
                 continue
 
+            # offset 不受 components 过滤：暴露出来的就只有 L*，用户设了就该生效
             delta_out = delta_out * keep
-            delta_in = delta_in * keep
+            delta_in = delta_in * keep + offset
             # 按遮罩值在两个基准之间线性过渡。下游 ImageCompositeMasked 是
             # mask * source + (1 - mask) * destination，所以相对「未校正合成图」的净
             # 修正是 m * delta_out + m^2 * (delta_in - delta_out)：一次项对应全局 VAE
