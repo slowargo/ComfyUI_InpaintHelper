@@ -239,6 +239,62 @@ app.registerExtension({
                 valuesWidget.hidden = true;
                 indexWidget.hidden = true;
 
+                // min/max/step/slot_count are one-off setup knobs, so fold them behind the
+                // frontend's built-in advanced-widget mechanism instead of rolling our own:
+                // it supplies the "Show/Hide Advanced" context menu entry, the hit-test and
+                // draw skipping, and `showAdvanced` serialization for free (verified present
+                // in frontend 1.37.2 / 1.38.2 / 1.45.20).
+                // The canvas renderer reads `widget.advanced`; the Vue node renderer added in
+                // 1.45.x reads `widget.options.advanced`, so set both to cover either path.
+                // `advanced` stays on unconditionally — the context menu only offers
+                // "Show/Hide Advanced" while `widgets.some(w => w.advanced)` holds.
+                const configWidgets = [minWidget, maxWidget, stepWidget, slotCountWidget];
+                for (const configWidget of configWidgets) {
+                    configWidget.advanced = true;
+                    configWidget.options = {
+                        ...configWidget.options,
+                        advanced: true,
+                    };
+                }
+
+                // `advanced` alone does not actually free up any vertical space. LGraphNode
+                // re-runs its widget layout on every repaint, and that pass selects widgets
+                // with a bare `!widget.hidden` instead of isWidgetVisible(). An advanced-only
+                // widget is therefore skipped when drawing, hit-testing and measuring, yet
+                // still stacked by the layout pass, which then calls setSize() to grow the
+                // node straight back to its full height on the very next frame. So mirror the
+                // state onto `hidden`, the one flag that pass honours.
+                //
+                // Sizing also has to be driven by hand: the built-in toggleAdvanced() re-fits
+                // through expandToFitContent(), which is Math.max-based and so never shrinks.
+                //
+                // Hook the field rather than toggleAdvanced(), because that method is only one
+                // of the ways `showAdvanced` gets written: 1.45.x's Vue nodes assign it
+                // straight from their footer button, and configure() assigns it when restoring
+                // a saved workflow. Both bypass toggleAdvanced() entirely.
+                //
+                // Defaults to expanded: configure() writes a saved value over this, and
+                // workflows saved before this change carry no `showAdvanced` key at all, so
+                // they keep showing every widget exactly as before.
+                let showAdvancedState = true;
+                Object.defineProperty(this, "showAdvanced", {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => showAdvancedState,
+                    set: (nextShowAdvanced) => {
+                        showAdvancedState = nextShowAdvanced;
+                        for (const configWidget of configWidgets) {
+                            configWidget.hidden = !nextShowAdvanced;
+                        }
+                        // isWidgetVisible() reports every widget as invisible while the node is
+                        // LiteGraph-collapsed, so re-fitting there would squash the stored size
+                        // down to the title bar and serialize that ruined height out.
+                        if (!this.flags?.collapsed) {
+                            this.setSize([this.size[0], this.computeSize()[1]]);
+                        }
+                    },
+                });
+
                 const parseSlotCount = () => {
                     const slotCount = Number.parseInt(slotCountWidget.value, 10);
                     return Number.isFinite(slotCount) ? Math.max(slotCount, 0) : 0;
