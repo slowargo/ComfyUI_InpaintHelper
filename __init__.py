@@ -1323,7 +1323,7 @@ class MaskedColorMatch:
 
     作用范围仅限上述 VAE 分量。重绘区内采样器自身还会叠加一层偏移，那部分在遮罩外没有
     任何可观测样本，本节点无法、也不试图消除它——强行把重绘区均值拉回原图均值会破坏
-    "重绘本来就该改变颜色"的正常情况。
+    "重绘本来就该改变颜色"的正常情况。见 InpaintRegionColorFix。
     """
 
     # Guard rails for the per-channel least-squares fit.
@@ -1493,6 +1493,202 @@ class MaskedColorMatch:
 
         report = "\n".join(report_lines)
         logger.debug(f"[MaskedColorMatch]\n{report}")
+        return (corrected, report)
+
+
+class InpaintRegionColorFix:
+    """把重绘区的色彩基准拉回原图，按遮罩值在「遮罩外」和「遮罩内」两个基准之间过渡。
+
+    与 MaskedColorMatch 的本质区别：遮罩外有 ground truth（内容未改动，原图就是答案），
+    拟合出来的是测量值；遮罩内没有 ground truth，任何校正都是在编码一条假设——
+    「重绘不应该改变该区域的平均亮度（components 选 luminance_and_chroma 时还包括平均色度）」。
+
+    默认只校正亮度：亮度损失跨内容、跨采样器都表现为同向的系统性偏移，而色度偏移的方向
+    随内容变化，与真实重绘意图分不开，一并拉回就会撤销重绘本该带来的颜色变化。
+
+    高 denoise 的内容替换场景上述假设不成立（重绘本来就该改变颜色），那种情况下应调低
+    strength 或不用本节点。校正量按遮罩值插值，与偏移量随遮罩强度递增的实际趋势同向，
+    羽化带不会被过校正，也不会引入新的接缝。
+    """
+
+    # 遮罩外总体是整张图的大头，下限跟 MaskedColorMatch 对齐。
+    MIN_OUTSIDE_SAMPLES = 1024
+    MIN_OUTSIDE_RATIO = 0.002
+    # 重绘核心天生就小（小笔刷修补可能只有几百像素），下限必须比遮罩外低得多，否则
+    # 本该生效的场景会被跳过。这个量级够用是因为估计量是配对差分（同一批像素上
+    # reference 减 image），内容方差会抵消，标准误只取决于逐像素差值的离散度，远小于
+    # 图像自身的方差；再往下降就会被空间自相关放大到与待修偏移同量级。
+    MIN_INSIDE_SAMPLES = 256
+    # Lab 单位。遮罩内基准差超过这个量，多半是真实内容变化而不是漂移，出声提醒。
+    LOUD_DELTA = 5.0
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE", {"tooltip": "The VAE-decoded inpaint result to correct."}),
+                "reference": ("IMAGE", {"tooltip": "The original image before VAE encode, same framing as image."}),
+                "mask": ("MASK", {"tooltip": "The inpaint mask. Its feather is used as the blend ramp between the outside and inside baselines."}),
+                "components": (["luminance", "luminance_and_chroma"], {
+                    "default": "luminance",
+                    "tooltip": "luminance shifts L* only, so hue and saturation are left alone except where the shift pushes a pixel out of gamut - the safe default, since L* drift is the only part that measures as systematic. luminance_and_chroma also pulls a*/b* back, which fixes colour casts but undoes intentional colour changes in the repainted area."
+                }),
+                "strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Blends the correction: 0 returns the input untouched, 1 applies the full baseline shift."
+                }),
+                "outside_threshold": ("FLOAT", {
+                    "default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Mask values at or below this define the outside population, whose baseline shift is a real measurement. Must stay below inside_threshold."
+                }),
+                "inside_threshold": ("FLOAT", {
+                    "default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Mask values at or above this define the repainted core, whose baseline shift is an assumption. A mask whose peak never reaches this value gets no inside correction - which is correct, since such a mask barely repaints anything."
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "report")
+    FUNCTION = "fix_region"
+    CATEGORY = "Slowargo"
+    DESCRIPTION = "Pull the repainted region's colour baseline back to the original in Lab space, ramping the correction by mask value so the feathered edge stays seamless. Corrects the sampler-induced drift that MaskedColorMatch cannot see."
+
+    @staticmethod
+    def _masked_mean(lab_hwc: torch.Tensor, selection: torch.Tensor, count: int) -> torch.Tensor:
+        return (lab_hwc * selection.unsqueeze(-1)).sum(dim=(0, 1)) / count
+
+    @staticmethod
+    def _fmt_delta(delta: torch.Tensor) -> str:
+        return "L*={:+.3f} a*={:+.3f} b*={:+.3f}".format(*delta.tolist())
+
+    def fix_region(self, image, reference, mask, components="luminance", strength=1.0,
+                   outside_threshold=0.05, inside_threshold=0.95):
+        if image.ndim != 4:
+            raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
+        if image.shape[-1] != 3:
+            raise ValueError(f"Expected a 3-channel IMAGE for Lab conversion, got {image.shape[-1]} channels")
+        if reference.ndim != 4 or reference.shape[-1] != 3:
+            raise ValueError(f"Expected reference IMAGE with shape [B,H,W,3], got: {tuple(reference.shape)}")
+        if outside_threshold >= inside_threshold:
+            raise ValueError(
+                f"outside_threshold ({outside_threshold}) must stay below inside_threshold "
+                f"({inside_threshold}); otherwise the two populations overlap and the outside "
+                f"baseline gets contaminated by repainted content"
+            )
+
+        # 整条链路要过一次 RGB->Lab->RGB 往返，本身就不是无损的；strength 为 0 时
+        # 在校验之后短路，保证原样返回，同时不让非法输入蒙混过关。
+        if strength == 0:
+            return (image.float(), "strength=0, unchanged")
+
+        # kornia 是 comfy_extras/nodes_post_processing.py 的模块级依赖，必然可用；
+        # 这里延迟导入只是不想让本扩展的加载路径多挂一个硬依赖，不是可选降级。
+        import kornia
+
+        # kornia 的 rgb_to_lab 假定输入在 [0,1]，越界不会产 NaN 但会让 Lab 值跑飞、
+        # 统计量随之失真。上游并非所有 VAE 分支都 clamp，这里自己兜住。
+        img = image.float().clamp(0.0, 1.0)
+        batch, height, width, _ = img.shape
+
+        ref = reference.float().to(img.device).clamp(0.0, 1.0)
+        if ref.shape[1:3] != (height, width):
+            logger.warning(
+                f"[InpaintRegionColorFix] reference size {tuple(ref.shape[1:3])} != image size {(height, width)}, resizing reference"
+            )
+            ref = _resize_bchw_to(ref.permute(0, 3, 1, 2), (height, width)).permute(0, 2, 3, 1)
+        ref = _broadcast_batch(ref, batch, "reference")
+
+        msk = _normalize_mask(mask, height, width, img.device)
+        # 两个统计总体都往保守方向收一格：外部用 max 膨胀遮罩后再取阈，核心区用 min
+        # 腐蚀后再取阈，避免过渡带同时混进两边。ramp 用的是未经形态学的原始遮罩，
+        # 所以核心边缘会欠校正约一格、外部边缘会渗入约一格，量级可忽略。
+        grown = F.max_pool2d(msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
+        shrunk = -F.max_pool2d(-msk.unsqueeze(1), kernel_size=3, stride=1, padding=1).squeeze(1)
+        outside = _broadcast_batch(grown <= outside_threshold, batch, "mask")
+        inside = _broadcast_batch(shrunk >= inside_threshold, batch, "mask")
+        msk = _broadcast_batch(msk, batch, "mask")
+
+        lab_img = kornia.color.rgb_to_lab(img.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+        lab_ref = kornia.color.rgb_to_lab(ref.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+
+        chroma = components == "luminance_and_chroma"
+        keep = torch.tensor([1.0, 1.0, 1.0] if chroma else [1.0, 0.0, 0.0],
+                            dtype=lab_img.dtype, device=lab_img.device)
+        min_outside = max(self.MIN_OUTSIDE_SAMPLES, int(height * width * self.MIN_OUTSIDE_RATIO))
+
+        lab_out = torch.empty_like(lab_img)
+        report_lines = [f"components={components} strength={strength:.2f} "
+                        f"outside<={outside_threshold:.2f} inside>={inside_threshold:.2f}"]
+
+        for b in range(batch):
+            n_out = int(outside[b].sum().item())
+            n_in = int(inside[b].sum().item())
+            flags = []
+
+            if n_out >= min_outside:
+                delta_out = (self._masked_mean(lab_ref[b], outside[b], n_out)
+                             - self._masked_mean(lab_img[b], outside[b], n_out))
+            else:
+                logger.warning(
+                    f"[InpaintRegionColorFix] batch {b}: outside population too small "
+                    f"({n_out} < {min_outside}), treating the outside baseline as unshifted"
+                )
+                delta_out = torch.zeros_like(keep)
+                flags.append("OUTSIDE_ZEROED")
+
+            if n_in >= self.MIN_INSIDE_SAMPLES:
+                delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
+                            - self._masked_mean(lab_img[b], inside[b], n_in))
+                # 告警看的是未经 components 过滤的原始偏差：luminance 模式下纯色相替换
+                # 的 ΔL* 很小，只有 a*/b* 会暴露「假设不成立」，过滤后就永远不告警了。
+                if bool((delta_in.abs() > self.LOUD_DELTA).any()):
+                    logger.warning(
+                        f"[InpaintRegionColorFix] batch {b}: inside baseline shift "
+                        f"{[round(v, 2) for v in delta_in.tolist()]} exceeds {self.LOUD_DELTA} Lab units - "
+                        f"this is more likely a real content change than drift, consider lowering strength"
+                    )
+                    flags.append("LOUD_DELTA")
+            else:
+                logger.warning(
+                    f"[InpaintRegionColorFix] batch {b}: repainted core too small "
+                    f"({n_in} < {self.MIN_INSIDE_SAMPLES}), falling back to the outside baseline"
+                )
+                delta_in = delta_out
+                flags.append("INSIDE_FALLBACK")
+
+            # 上游任何一个坏像素都会让均值变成 NaN，再逐像素相加就是整图报废
+            if not bool(torch.isfinite(torch.stack([delta_out, delta_in])).all()):
+                logger.warning(
+                    f"[InpaintRegionColorFix] batch {b}: non-finite baseline shift "
+                    f"(NaN/Inf in image or reference), skipping correction"
+                )
+                lab_out[b] = lab_img[b]
+                report_lines.append(f"[{b}] SKIPPED non-finite statistics")
+                continue
+
+            delta_out = delta_out * keep
+            delta_in = delta_in * keep
+            # 按遮罩值在两个基准之间线性过渡。下游 ImageCompositeMasked 是
+            # mask * source + (1 - mask) * destination，所以相对「未校正合成图」的净
+            # 修正是 m * delta_out + m^2 * (delta_in - delta_out)：一次项对应全局 VAE
+            # 分量，二次项对应内外基准差。m→0 时连续趋零，不产生新接缝。
+            ramp = msk[b].unsqueeze(-1)
+            lab_out[b] = lab_img[b] + (delta_out + (delta_in - delta_out) * ramp) * strength
+
+            suffix = (" " + " ".join(flags)) if flags else ""
+            report_lines.append(
+                f"[{b}] n_out={n_out} n_in={n_in} | outside {self._fmt_delta(delta_out)} "
+                f"| inside {self._fmt_delta(delta_in)}{suffix}"
+            )
+
+        # L* 平移会把高光推出色域：R/G 截到 1.0 而 B 仍在上升，净效果是色相/饱和度
+        # 位移而非单纯提亮，迭代多轮后高光会逐步压平。8bit 管线下无解。
+        # 截断实际发生在 kornia 内部（lab_to_rgb 的 clip 默认为 True），外面这层
+        # clamp 只是防它哪天改默认值。
+        corrected = kornia.color.lab_to_rgb(lab_out.permute(0, 3, 1, 2)).permute(0, 2, 3, 1).clamp_(0.0, 1.0)
+        report = "\n".join(report_lines)
+        logger.debug(f"[InpaintRegionColorFix]\n{report}")
         return (corrected, report)
 
 
@@ -1849,6 +2045,7 @@ NODE_CLASS_MAPPINGS = {
     "RefreshTriggerV1": RefreshTriggerV1,
     "ClearHistoryNode": ClearHistoryNode,
     "MaskedColorMatch": MaskedColorMatch,
+    "InpaintRegionColorFix": InpaintRegionColorFix,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1867,4 +2064,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RefreshTriggerV1": "Refresh Trigger",
     "ClearHistoryNode": "Clear History",
     "MaskedColorMatch": "Masked Color Match (Inpaint Drift Fix)",
+    "InpaintRegionColorFix": "Inpaint Region Color Fix",
 }
