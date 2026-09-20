@@ -239,61 +239,66 @@ app.registerExtension({
                 valuesWidget.hidden = true;
                 indexWidget.hidden = true;
 
-                // min/max/step/slot_count are one-off setup knobs, so fold them behind the
-                // frontend's built-in advanced-widget mechanism instead of rolling our own:
-                // it supplies the "Show/Hide Advanced" context menu entry, the hit-test and
-                // draw skipping, and `showAdvanced` serialization for free (verified present
-                // in frontend 1.37.2 / 1.38.2 / 1.45.20).
-                // The canvas renderer reads `widget.advanced`; the Vue node renderer added in
-                // 1.45.x reads `widget.options.advanced`, so set both to cover either path.
-                // `advanced` stays on unconditionally — the context menu only offers
-                // "Show/Hide Advanced" while `widgets.some(w => w.advanced)` holds.
+                // min/max/step/slot_count are one-off setup knobs, so let the user fold them
+                // away through the node's context menu.
+                //
+                // Hand-rolled rather than tagging them with the frontend's `advanced` flag.
+                // That flag is honoured when drawing, hit-testing and measuring, but LGraphNode
+                // re-runs its widget layout on every repaint selecting widgets with a bare
+                // `!widget.hidden`, so an advanced-only widget still gets stacked there and the
+                // node is setSize()'d back to full height on the very next frame. `hidden` has
+                // to be driven by hand either way, which leaves the built-in mechanism supplying
+                // only its menu entry and its own serialized flag — neither worth the coupling,
+                // and doing it here keeps the menu wording ours and drops the advanced outline.
+                // 1.45.x renamed that layout pass' selection to getLayoutWidgets(), which filters
+                // on `hidden` just the same, so this works there too.
+                const HIDE_CONFIG_PROPERTY = "slowargoHideConfigWidgets";
                 const configWidgets = [minWidget, maxWidget, stepWidget, slotCountWidget];
-                for (const configWidget of configWidgets) {
-                    configWidget.advanced = true;
-                    configWidget.options = {
-                        ...configWidget.options,
-                        advanced: true,
-                    };
-                }
 
-                // `advanced` alone does not actually free up any vertical space. LGraphNode
-                // re-runs its widget layout on every repaint, and that pass selects widgets
-                // with a bare `!widget.hidden` instead of isWidgetVisible(). An advanced-only
-                // widget is therefore skipped when drawing, hit-testing and measuring, yet
-                // still stacked by the layout pass, which then calls setSize() to grow the
-                // node straight back to its full height on the very next frame. So mirror the
-                // state onto `hidden`, the one flag that pass honours.
-                //
-                // Sizing also has to be driven by hand: the built-in toggleAdvanced() re-fits
-                // through expandToFitContent(), which is Math.max-based and so never shrinks.
-                //
-                // Hook the field rather than toggleAdvanced(), because that method is only one
-                // of the ways `showAdvanced` gets written: 1.45.x's Vue nodes assign it
-                // straight from their footer button, and configure() assigns it when restoring
-                // a saved workflow. Both bypass toggleAdvanced() entirely.
-                //
-                // Defaults to expanded: configure() writes a saved value over this, and
-                // workflows saved before this change carry no `showAdvanced` key at all, so
-                // they keep showing every widget exactly as before.
-                let showAdvancedState = true;
-                Object.defineProperty(this, "showAdvanced", {
-                    configurable: true,
-                    enumerable: true,
-                    get: () => showAdvancedState,
-                    set: (nextShowAdvanced) => {
-                        showAdvancedState = nextShowAdvanced;
-                        for (const configWidget of configWidgets) {
-                            configWidget.hidden = !nextShowAdvanced;
-                        }
-                        // isWidgetVisible() reports every widget as invisible while the node is
-                        // LiteGraph-collapsed, so re-fitting there would squash the stored size
-                        // down to the title bar and serialize that ruined height out.
-                        if (!this.flags?.collapsed) {
-                            this.setSize([this.size[0], this.computeSize()[1]]);
-                        }
-                    },
-                });
+                // Stored on `properties`, which LGraphNode serializes and restores for us.
+                // Absent means shown, so workflows saved before this change are unaffected.
+                const isConfigHidden = () => this.properties[HIDE_CONFIG_PROPERTY] === true;
+
+                // Every widget reads as invisible while the node is LiteGraph-collapsed, so
+                // computeSize() there returns a bare slot row and re-fitting would shrink the
+                // stored size to that, then serialize the ruined height out.
+                const refitToContent = () => {
+                    if (this.flags?.collapsed) return;
+                    this.setSize([this.size[0], this.computeSize()[1]]);
+                };
+
+                const applyConfigVisibility = () => {
+                    const shouldHide = isConfigHidden();
+                    for (const configWidget of configWidgets) {
+                        configWidget.hidden = shouldHide;
+                    }
+                    refitToContent();
+                };
+
+                const origGetExtraMenuOptions = this.getExtraMenuOptions;
+                this.getExtraMenuOptions = (canvas, options) => {
+                    // Core's own implementation unshifts into `options` and returns undefined,
+                    // so pass the same array straight through.
+                    const extraOptions = origGetExtraMenuOptions?.call(this, canvas, options);
+                    // Collapsed nodes still get a context menu, but refitToContent() has to sit
+                    // out while collapsed, so a toggle there would leave the node stuck at its
+                    // old height once expanded. Offer nothing rather than something broken.
+                    if (this.flags?.collapsed) return extraOptions;
+
+                    const toggleEntry = {
+                        content: isConfigHidden() ? "🎛️ Show config widgets" : "🎛️ Hide config widgets",
+                        callback: () => {
+                            this.properties[HIDE_CONFIG_PROPERTY] = !isConfigHidden();
+                            applyConfigVisibility();
+                            app.graph.setDirtyCanvas(true, true);
+                        },
+                    };
+                    // The legacy canvas menu prepends whatever we return, ahead of Title/Mode/…;
+                    // 1.45.x's Vue menu instead files unrecognised labels under "Extensions" at
+                    // the bottom. Either way a returned array beats pushing onto `options`,
+                    // which would bury the entry down by Clone/Remove.
+                    return Array.isArray(extraOptions) ? [...extraOptions, toggleEntry] : [toggleEntry];
+                };
 
                 const parseSlotCount = () => {
                     const slotCount = Number.parseInt(slotCountWidget.value, 10);
@@ -566,7 +571,7 @@ app.registerExtension({
                         wrapWidgetPointerDown(selectorWidget, slotIndex);
                     });
 
-                    this.setSize?.(this.computeSize());
+                    applyConfigVisibility();
                     updateSelectorWidgetWidths();
                     app.graph.setDirtyCanvas(true, true);
                 };
