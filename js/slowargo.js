@@ -38,6 +38,9 @@ const HAS_CHINESE = /[\u4e00-\u9fa5]/;
 // View History 的「置顶优先」视图开关，只影响列表显示顺序，不写回 store_file
 const PIN_TO_TOP_KEY = "slowargo.stringHistory.pinToTop";
 
+// View History 的「截断长条目」视图开关，同样只影响显示
+const CLAMP_TEXT_KEY = "slowargo.stringHistory.clampText";
+
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
@@ -1201,20 +1204,39 @@ app.registerExtension({
                         }
                     });
                     const pinToTopLabel = $el("label", {
-                        className: "slowargo-history-pin-top",
+                        className: "slowargo-history-toggle",
                         title: "\ud83d\udccc Pinned entries float to the top of this list.\n"
                             + "Unchecked: everything stays in most-recently-used order.\n"
                             + "Ignored while searching \u2014 results are ranked by match score.\n"
                             + "Display only \u2014 never changes the order stored in the file."
                     }, [pinToTopCheckbox, $el("span", {
-                        className: "slowargo-history-pin-top-icon",
+                        className: "slowargo-history-toggle-icon",
                         textContent: "\ud83d\udccc\u2b06"
                     })]);
 
-                    // 工具栏：搜索框 + 置顶开关
+                    // 截断开关（默认开启）；条目常是整段 prompt，不限高会撑满整个列表
+                    const clampTextCheckbox = $el("input", {
+                        type: "checkbox",
+                        checked: localStorage.getItem(CLAMP_TEXT_KEY) !== "false",
+                        onchange: async () => {
+                            localStorage.setItem(CLAMP_TEXT_KEY, clampTextCheckbox.checked);
+                            renderList(await getFilteredEntries());
+                        }
+                    });
+                    const clampTextLabel = $el("label", {
+                        className: "slowargo-history-toggle",
+                        title: "\u2702\ufe0f Long entries are cut off after 5 lines.\n"
+                            + "Unchecked: every entry is shown in full.\n"
+                            + "Hover a cut-off entry to read all of it."
+                    }, [clampTextCheckbox, $el("span", {
+                        className: "slowargo-history-toggle-icon",
+                        textContent: "\u2702\ufe0f"
+                    })]);
+
+                    // 工具栏：搜索框 + 两个视图开关
                     const toolbar = $el("div", {
                         className: "slowargo-history-toolbar"
-                    }, [searchInput, pinToTopLabel]);
+                    }, [searchInput, pinToTopLabel, clampTextLabel]);
 
                     // 包装容器
                     const wrapper = $el("div", {
@@ -1275,6 +1297,7 @@ app.registerExtension({
                     const renderList = (data) => {
                         listContainer.innerHTML = ""; // Clear existing content
                         const fragment = document.createDocumentFragment(); // Create a document fragment
+                        const clamped = clampTextCheckbox.checked;
                         data.forEach(item => {
                             const row = $el("div", {
                                 className: "slowargo-history-row"
@@ -1283,7 +1306,9 @@ app.registerExtension({
                             // 点击内容回填并关闭
                             const text = $el("div", {
                                 textContent: item.content,
-                                className: "slowargo-history-text",
+                                className: `slowargo-history-text ${clamped ? "clamped" : ""}`,
+                                // 截断时用原生 tooltip 兜底，避免只看前 5 行分不清两条记录
+                                title: clamped ? item.content : "",
                                 onclick: () => {
                                     this.widgets.find(w => w.name === "string").value = item.content;
                                     popup.close(); // 选中后自动关闭

@@ -23,8 +23,8 @@
     transition: border-color 0.2s;
 }
 
-/* "Pin to top" toggle — display order only, never written back to the store file */
-.slowargo-history-pin-top {
+/* View toggles (pin to top / clamp) — display only, never written back to the store file */
+.slowargo-history-toggle {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -36,27 +36,28 @@
     user-select: none;
 }
 
-/* 需要 wrapper 前缀提权，否则被 .comfy-modal input[type="checkbox"] 的 margin 压过 */
-.slowargo-history-wrapper .slowargo-history-pin-top input {
+/* 必须压过 design-system 的 .comfy-modal input[type="checkbox"] (0,2,1)。
+   只加 wrapper 前缀只是打平、胜负看加载顺序，所以连属性选择器一起带上凑到 (0,3,1)。*/
+.slowargo-history-wrapper .slowargo-history-toggle input[type="checkbox"] {
     margin: 0;
     cursor: pointer;
 }
 
-/* 搜索时列表按匹配得分排序，开关不适用，整体置灰 */
-.slowargo-history-pin-top:has(input:disabled) {
+/* 搜索时列表按匹配得分排序，置顶开关不适用，整体置灰 */
+.slowargo-history-toggle:has(input:disabled) {
     opacity: 0.4;
     cursor: default;
 }
 
 /* 只放图标，行为靠 label 的 tooltip 解释 */
-.slowargo-history-pin-top-icon {
+.slowargo-history-toggle-icon {
     font-size: 14px;
     line-height: 1;
     opacity: 0.55;
     transition: opacity 0.2s;
 }
 
-.slowargo-history-pin-top input:checked + .slowargo-history-pin-top-icon {
+.slowargo-history-toggle input:checked + .slowargo-history-toggle-icon {
     opacity: 1;
 }
 
@@ -111,6 +112,19 @@
     color: #bbb;
     white-space: pre-wrap;
     transition: background 0.2s;
+}
+
+/* 截断到 5 行。-webkit-line-clamp 要求 display:-webkit-box，会失去 flex 的垂直居中，
+   所以改用 align-self 把整块文字在行内居中。纵向 padding 必须去掉：overflow 裁剪在
+   padding box 上，留着底部 padding 会漏出第 6 行约 5px 的残影（横向 padding 无此问题）。*/
+.slowargo-history-text.clamped {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+    line-clamp: 5;
+    align-self: center;
+    overflow: hidden;
+    padding: 0 5px;
 }
 
 /* .slowargo-history-text:hover { */
