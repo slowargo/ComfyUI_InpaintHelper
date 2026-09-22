@@ -1561,9 +1561,13 @@ class InpaintRegionColorFix:
                     "default": 8.0, "min": 0.0, "max": 100.0, "step": 0.5,
                     "tooltip": "Cap, in Lab units, on how far the repainted core's baseline may sit from the outside one; 0 disables the cap. Drift alone stays well inside it, so the cap only binds when the repaint really changed the content - it then limits the damage instead of letting the correction undo that change. For heavy content replacement, inside_source=manual is still better."
                 }),
-                "estimator": (["mean", "median"], {
+                "estimator": (["mean", "median", "clip"], {
                     "default": "mean",
-                    "tooltip": "How the repainted core's baseline is summarised. mean is marginally more accurate when the repaint only refined detail, but it tracks any real content change one-for-one and is unbounded. median gives that up for a small, fixed cost and stays close to the drift even when part of the region was genuinely repainted. Only affects the core - the outside baseline always uses the mean, where there is no content change to be robust against."
+                    "tooltip": "How the repainted core's baseline is summarised. mean is marginally more accurate when the repaint only refined detail, but it tracks any real content change one-for-one and is unbounded. median gives that up for a small, fixed cost and stays close to the drift even when part of the region was genuinely repainted. clip assumes the repaint only altered part of the region: it locks onto the dominant offset and discards pixels that moved far from it, controlled by clip_k. Pick it when a minority of the core was really repainted and the rest only drifted. If instead the whole region was reworked there is no untouched majority to lock onto, and it latches onto whichever mode dominates and over-corrects past mean - so this is a scenario switch, not a safer default. Only affects the core - the outside baseline always uses the mean, where there is no content change to be robust against."
+                }),
+                "clip_k": ("FLOAT", {
+                    "default": 3.0, "min": 1.0, "max": 20.0, "step": 0.5,
+                    "tooltip": "For estimator=clip: how far a core pixel may sit from the current offset estimate before it is treated as repainted content and dropped, in units of the outside population's robust sigma. Smaller keeps less and rejects harder. The unit is taken from the outside, so the setting does not have to be retuned per image."
                 }),
             },
         }
@@ -1585,12 +1589,40 @@ class InpaintRegionColorFix:
         return diff_hwc[selection].median(dim=0).values
 
     @staticmethod
+    def _masked_clip(diff_hwc: torch.Tensor, selection: torch.Tensor,
+                     out_diff: torch.Tensor, k: float, iters: int = 12) -> torch.Tensor:
+        """中心自由的迭代截断：找核心区的主导偏移，把离它太远的像素当成重绘内容剔除。
+
+        中心必须是自由参数。用「接近遮罩外基准」来筛像素会把待估的量当成筛选条件，
+        估计量被结构性地拉回遮罩外值，无论真实偏移是多少都得到零——看着很稳，实则退化。
+        尺度取自遮罩外总体（那里没有内容变化，离散度就是纯测量噪声），所以 k 的含义
+        跨图一致，不必逐图重调。
+        """
+        din = diff_hwc[selection]
+        # 稳健 sigma：MAD 换算到正态等效标准差，不被遮罩外的少量坏像素带跑
+        mad = (out_diff - out_diff.median(dim=0).values).abs().median(dim=0).values
+        scale = (1.4826 * mad * k).clamp(min=1e-6)
+        center = din.median(dim=0).values
+        for _ in range(iters):
+            keep = (din - center).abs() <= scale
+            n_keep = keep.sum(dim=0)
+            # 任一通道筛得过狠就停在上一轮，别让估计量落到几个像素上
+            if bool((n_keep < 64).any()):
+                break
+            nxt = (din * keep).sum(dim=0) / n_keep
+            if bool(((nxt - center).abs() < 1e-4).all()):
+                center = nxt
+                break
+            center = nxt
+        return center
+
+    @staticmethod
     def _fmt_delta(delta: torch.Tensor) -> str:
         return "L*={:+.3f} a*={:+.3f} b*={:+.3f}".format(*delta.tolist())
 
     def fix_region(self, image, reference, mask, components="luminance", inside_source="fit",
                    inside_offset_l=0.0, strength=1.0, outside_threshold=0.05, inside_threshold=0.95,
-                   max_excess=8.0, estimator="mean"):
+                   max_excess=8.0, estimator="mean", clip_k=3.0):
         if image.ndim != 4:
             raise ValueError(f"Expected IMAGE tensor with 4 dims [B,H,W,C], got shape: {tuple(image.shape)}")
         if image.shape[-1] != 3:
@@ -1651,7 +1683,8 @@ class InpaintRegionColorFix:
         min_outside = max(self.MIN_OUTSIDE_SAMPLES, int(height * width * self.MIN_OUTSIDE_RATIO))
 
         lab_out = torch.empty_like(lab_img)
-        report_lines = [f"components={components} inside_source={inside_source} estimator={estimator} "
+        est_desc = f"{estimator}(k={clip_k:.1f})" if estimator == "clip" else estimator
+        report_lines = [f"components={components} inside_source={inside_source} estimator={est_desc} "
                         f"inside_offset_l={inside_offset_l:+.2f} strength={strength:.2f} "
                         f"outside<={outside_threshold:.2f} inside>={inside_threshold:.2f} "
                         f"max_excess={max_excess:.1f}"]
@@ -1687,6 +1720,9 @@ class InpaintRegionColorFix:
                 else:
                     if estimator == "median":
                         delta_in = self._masked_median(lab_ref[b] - lab_img[b], inside[b])
+                    elif estimator == "clip":
+                        diff_b = lab_ref[b] - lab_img[b]
+                        delta_in = self._masked_clip(diff_b, inside[b], diff_b[outside[b]], clip_k)
                     else:
                         delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
                                     - self._masked_mean(lab_img[b], inside[b], n_in))
