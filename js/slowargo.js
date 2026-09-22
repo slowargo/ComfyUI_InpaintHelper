@@ -35,6 +35,9 @@ async function getPinyinLib() {
 
 const HAS_CHINESE = /[\u4e00-\u9fa5]/;
 
+// View History 的「置顶优先」视图开关，只影响列表显示顺序，不写回 store_file
+const PIN_TO_TOP_KEY = "slowargo.stringHistory.pinToTop";
+
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
@@ -1188,14 +1191,46 @@ app.registerExtension({
                         className: "slowargo-history-list-container"
                     });
 
+                    // 置顶开关（默认开启，仅改变显示顺序，不会重写 store_file）
+                    const pinToTopCheckbox = $el("input", {
+                        type: "checkbox",
+                        checked: localStorage.getItem(PIN_TO_TOP_KEY) !== "false",
+                        onchange: async () => {
+                            localStorage.setItem(PIN_TO_TOP_KEY, pinToTopCheckbox.checked);
+                            renderList(await getFilteredEntries());
+                        }
+                    });
+                    const pinToTopLabel = $el("label", {
+                        className: "slowargo-history-pin-top",
+                        title: "\ud83d\udccc Pinned entries float to the top of this list.\n"
+                            + "Unchecked: everything stays in most-recently-used order.\n"
+                            + "Display only \u2014 never changes the order stored in the file."
+                    }, [pinToTopCheckbox, $el("span", {
+                        className: "slowargo-history-pin-top-icon",
+                        textContent: "\ud83d\udccc\u2b06"
+                    })]);
+
+                    // 工具栏：搜索框 + 置顶开关
+                    const toolbar = $el("div", {
+                        className: "slowargo-history-toolbar"
+                    }, [searchInput, pinToTopLabel]);
+
                     // 包装容器
                     const wrapper = $el("div", {
                         className: "slowargo-history-wrapper"
-                    }, [searchInput, listContainer]);
+                    }, [toolbar, listContainer]);
+
+                    // 置顶是纯视图变换：不改动 entries 本身，也不回写文件。
+                    // Array.sort 是稳定的，所以置顶区和非置顶区内部都保持原来的最近使用顺序。
+                    const applyPinToTop = (list) => {
+                        if (!pinToTopCheckbox.checked) return list;
+                        return [...list].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+                    };
 
                     const getFilteredEntries = async () => {
                         const query = searchInput.value.toLowerCase().trim();
-                        if (!query) return entries;
+                        // 有搜索词时按匹配得分排序，置顶开关只作用于无搜索词的基础顺序
+                        if (!query) return applyPinToTop(entries);
 
                         const lib = await getPinyinLib();
 
@@ -1313,7 +1348,7 @@ app.registerExtension({
                         renderList(await getFilteredEntries());
                     };
 
-                    renderList(entries);
+                    renderList(await getFilteredEntries());
 
                     // 3. 使用 ComfyUI 内部 Dialog 弹出
                     const popup = new (await import("../../../scripts/ui/dialog.js")).ComfyDialog();

@@ -71,21 +71,26 @@ class RememberStrings:
         new_entry = {"content": string, "pinned": is_pinned}
         stored_entries.insert(0, new_entry)
 
-        # 3. 淘汰逻辑
+        # 3. 淘汰逻辑（只淘汰，不重排）
+        # 文件里存的始终是「最近使用」顺序，Pinned 置顶交给读取端做视图变换，由 View History
+        # 弹窗的 Pin to top 开关控制。条目没有时间戳字段，顺序就是唯一的时间信息，写入时按
+        # pinned 重排会把它永久破坏：pin 再 unpin 之后，最旧的条目会留在列表最前面。
         # 我们需要保留所有 pinned=True 的，以及排在前面的非 pinned 条目，总数不超过 max_entries
-        pinned_items = [item for item in stored_entries if item.get("pinned")]
-        unpinned_items = [item for item in stored_entries if not item.get("pinned")]
+        pinned_count = sum(1 for item in stored_entries if item.get("pinned"))
 
         # 计算还能容纳多少个非置顶条目
         # 即使 pinned 很多，我们也至少保证总数逻辑或优先保证 pinned
-        allowed_unpinned_count = max(0, max_entries - len(pinned_items))
-        final_entries = pinned_items + unpinned_items[:allowed_unpinned_count]
+        allowed_unpinned_count = max(0, max_entries - pinned_count)
 
-        # 如果你希望最新的操作始终排在最前（无论是否 pin），可以用下面的简单逻辑：
-        # 但通常逻辑是：Pinned 永远在顶端，新的在 Pinned 下方，或者干脆只按时间排，淘汰时跳过 Pinned。
-
-        # 重新排序：Pinned 在上，其余按新旧排
-        final_entries = sorted(final_entries, key=lambda x: x.get("pinned", False), reverse=True)
+        # 保序遍历：pinned 全留，非 pinned 只留最靠前（即最近使用）的若干条
+        final_entries = []
+        kept_unpinned = 0
+        for item in stored_entries:
+            if item.get("pinned"):
+                final_entries.append(item)
+            elif kept_unpinned < allowed_unpinned_count:
+                final_entries.append(item)
+                kept_unpinned += 1
 
         # 保存文件
         try:
@@ -159,8 +164,8 @@ async def toggle_string_history_pin_api(request):
             entry["pinned"] = not entry.get("pinned", False)
             break
 
-    # 排序：Pin 优先，其余按位置
-    stored_entries.sort(key=lambda x: x.get("pinned", False), reverse=True)
+    # 不重排：Pin 只翻转一个布尔值，文件顺序保持「最近使用」不变，置顶由前端视图变换负责。
+    # 这样 pin / unpin 是完全可逆的，不会像重排那样丢掉条目的新旧信息。
 
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(stored_entries, f, ensure_ascii=False, indent=2)
