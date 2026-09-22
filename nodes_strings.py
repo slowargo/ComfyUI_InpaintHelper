@@ -136,6 +136,7 @@ class RememberStrings:
         return file_path, stored_entries
 
 
+# 获取历史记录接口
 @PromptServer.instance.routes.get("/slowargo_api/get_string_history")
 async def get_string_history_api(request):
     store_file = request.query.get("store_file", "")
@@ -143,6 +144,7 @@ async def get_string_history_api(request):
     return web.json_response({"entries": stored_entries})
 
 
+# Toggle Pin 接口 (修改返回值为最新列表)
 @PromptServer.instance.routes.post("/slowargo_api/toggle_string_history_pin")
 async def toggle_string_history_pin_api(request):
     json_data = await request.json()
@@ -165,6 +167,7 @@ async def toggle_string_history_pin_api(request):
     return web.json_response({"entries": stored_entries})
 
 
+# 3. 删除记录接口
 @PromptServer.instance.routes.post("/slowargo_api/delete_string_history")
 async def delete_entry_api(request):
     json_data = await request.json()

@@ -1,27 +1,17 @@
-import heapq
-import json
-import logging
-import os
-import shutil
-import time
-from decimal import Decimal, InvalidOperation
-from pathlib import Path
-from typing import List, Tuple
+"""Slowargo：ComfyUI 的 inpaint 辅助节点集。
 
-from PIL import Image, ImageOps, ImageSequence
-from PIL.PngImagePlugin import PngInfo
-from aiohttp import web
-from comfy.cli_args import args
-from comfy_api.latest import io
-import folder_paths
-import node_helpers
-import nodes
-import numpy as np
-from server import PromptServer
-import torch
-import torch.nn.functional as F
-import re
-import hashlib
+本文件只做两件事：把各模块的节点类汇总进 NODE_CLASS_MAPPINGS，以及声明
+WEB_DIRECTORY。节点实现按职责分在下面这几个模块里：
+
+    nodes_color.py     Lab 色彩校正（MaskedColorMatch / InpaintRegionColorFix）
+    nodes_image_io.py  图像读取、最近文件枚举，以及刷新预览的路由
+    nodes_save.py      图像保存、服务端文件搬运，以及搬运路由
+    nodes_strings.py   字符串记忆，以及它的历史记录路由
+    nodes_util.py      浮点开关/选择器、触发器、历史清理、SSIM 比较
+
+注意：API 路由是在模块 import 时注册的副作用。下面每一行导入看起来「只用到
+了几个节点类」，但删掉任何一行都会让该模块的路由一起消失。
+"""
 
 # 色彩校正节点拆到同名模块；映射表仍在本文件末尾统一维护
 from .nodes_color import InpaintRegionColorFix, MaskedColorMatch
@@ -42,43 +32,12 @@ from .nodes_image_io import (
 )
 from .nodes_strings import RememberStrings
 
-logger = logging.getLogger(__name__)
-
-# 工具函数：处理图像并转换为 PyTorch 张量
-
-
-# 单目录扫描结果缓存：key=(绝对目录, sub_folder, label, max_count) -> (目录 mtime_ns, 存入时刻, [(mtime, 显示名)])
-# 失效判断用两道条件，任一不满足就重扫：
-#   1) 目录自身的 mtime_ns 未变——新增/删除/改名会更新它；
-#   2) 缓存年龄未超过 _RECENT_DIR_TTL。
-# 光靠条件 1 不够：原地覆盖同名文件（SaveImageToFileName 就是这么干的）只会改
-# 文件的 mtime，不会改目录的，而缓存里存的 mtime 同时决定了跨目录排序和
-# top-N 的入选，漏判会让刚存的图一直不出现在列表里。TTL 把这种陈旧限死在 1 秒内。
-# 单次 os.stat 很便宜，但重扫一个几百文件的目录要贵上三个数量级；真正要挡的是
-# INPUT_TYPES 在同一次 prompt 校验里被连续调用好几次。
-
-
-#######################################################################################################################
-# V3 style nodes
-
-
-#######################################################################################################################
-# V1 style nodes
-
 
 ##############################################
 
 # Set the web directory, any .js file in that directory will be loaded by the frontend as a frontend extension
 WEB_DIRECTORY = "./js"
 
-# Add custom API routes, using router
-
-
-# 获取历史记录接口
-
-# Toggle Pin 接口 (修改返回值为最新列表)
-
-# 3. 删除记录接口
 
 # V3 Extension declaration
 

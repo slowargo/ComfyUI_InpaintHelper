@@ -12,6 +12,8 @@ import torch
 import torch.nn.functional as F
 
 
+#######################################################################################################################
+# V3 style nodes
 class FloatSwitchV3(io.ComfyNode):
     """
     A float switch node that outputs one of two float values based on a toggle switch.
@@ -90,6 +92,8 @@ class FloatSwitchV3(io.ComfyNode):
         return io.NodeOutput(selected_value)
 
 
+#######################################################################################################################
+# V1 style nodes
 class FloatSwitch:
     """
     浮点数切换器
