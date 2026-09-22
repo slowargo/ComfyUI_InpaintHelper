@@ -1204,6 +1204,7 @@ app.registerExtension({
                         className: "slowargo-history-pin-top",
                         title: "\ud83d\udccc Pinned entries float to the top of this list.\n"
                             + "Unchecked: everything stays in most-recently-used order.\n"
+                            + "Ignored while searching \u2014 results are ranked by match score.\n"
                             + "Display only \u2014 never changes the order stored in the file."
                     }, [pinToTopCheckbox, $el("span", {
                         className: "slowargo-history-pin-top-icon",
@@ -1345,6 +1346,8 @@ app.registerExtension({
 
                     // 搜索过滤
                     searchInput.oninput = async () => {
+                        // 有搜索词时列表按匹配得分排，置顶开关不参与，置灰表示此刻不适用
+                        pinToTopCheckbox.disabled = searchInput.value.trim() !== "";
                         renderList(await getFilteredEntries());
                     };
 

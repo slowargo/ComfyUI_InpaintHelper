@@ -36,9 +36,16 @@
     user-select: none;
 }
 
-.slowargo-history-pin-top input {
+/* 需要 wrapper 前缀提权，否则被 .comfy-modal input[type="checkbox"] 的 margin 压过 */
+.slowargo-history-wrapper .slowargo-history-pin-top input {
     margin: 0;
     cursor: pointer;
+}
+
+/* 搜索时列表按匹配得分排序，开关不适用，整体置灰 */
+.slowargo-history-pin-top:has(input:disabled) {
+    opacity: 0.4;
+    cursor: default;
 }
 
 /* 只放图标，行为靠 label 的 tooltip 解释 */
