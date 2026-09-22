@@ -10,7 +10,14 @@ ComfyUI_InpaintHelper is a ComfyUI extension that provides utility nodes for enh
 
 ### Core Components
 
-- **`__init__.py`**: Main Python module (1100+ lines) containing all node definitions and API routes
+- **`__init__.py`**: Package entry point only — relative imports, `WEB_DIRECTORY`, and the two
+  `NODE_*_MAPPINGS` tables. Node implementations live in the `nodes_*.py` modules below.
+- **`nodes_color.py`**: Lab colour correction (`MaskedColorMatch`, `InpaintRegionColorFix`) plus the
+  shared tensor helpers. Depends only on torch and kornia, so it can be tested without ComfyUI.
+- **`nodes_image_io.py`**: Image loading, recent-file enumeration, and the preview refresh routes
+- **`nodes_save.py`**: Image saving, server-side file transfer, and the transfer route
+- **`nodes_strings.py`**: String memory and its history routes
+- **`nodes_util.py`**: Float switch/selector, triggers, history clearing, SSIM comparison
 - **`js/slowargo.js`**: Main frontend extension for node UI enhancements, keyboard shortcuts, and general ComfyUI integration
 - **`js/maskEditorTurbo.js`**: Mask editor integration module with Fast Forward Mode and clipspace reload features
 - **Node Categories**: All nodes are categorized under "Slowargo" in ComfyUI
@@ -64,14 +71,17 @@ The extension integrates with ComfyUI through two main JavaScript modules:
 ### Common Tasks
 
 **Adding a new node**:
-1. Define the node class in `__init__.py` (see patterns in "Key Patterns" section)
-2. Add to `NODE_CLASS_MAPPINGS` dictionary at end of `__init__.py`
+1. Define the node class in whichever `nodes_*.py` module fits (see patterns in "Key Patterns")
+2. Import it in `__init__.py` and add it to both `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`
 3. If it needs UI enhancements, modify `js/slowargo.js` using `beforeRegisterNodeDef`
 
 **Adding a new API route**:
-1. Add decorator and handler in `__init__.py` using `@PromptServer.instance.routes.method()`
+1. Add decorator and handler in the `nodes_*.py` module that owns the code the route serves,
+   using `@PromptServer.instance.routes.method()`
 2. Route pattern: `/slowargo_api/endpoint_name`
 3. Can be called from frontend via `api.fetchApi()`
+4. Routes register as an *import side effect*. If the module is not already imported by
+   `__init__.py`, add the import — and never drop an existing one because it looks unused.
 
 **Updating mask editor features**:
 1. Modify `js/maskEditorTurbo.js` for Fast Forward Mode and reload functionality
@@ -111,6 +121,17 @@ Use the shared `process_image_to_tensor()` function for consistent image handlin
 
 ### API Routes Pattern
 Custom API routes follow the pattern `/slowargo_api/endpoint_name` and are registered using `@PromptServer.instance.routes.method()`.
+Each route lives next to the code it serves rather than in a central routes module, so the only
+thing that registers it is `__init__.py` importing that module.
+
+### Source Width
+Keep lines at 120 characters or less. Long user-facing prose (`tooltip`, `DESCRIPTION`) wraps at
+100 using parenthesised implicit string concatenation — when rewrapping one, check the joined value
+is unchanged rather than eyeballing the spaces at the seams.
+
+### Widget Order
+ComfyUI serialises widget values *by position*, so a new widget goes at the END of `required`.
+Inserting one in the middle silently breaks every saved workflow that uses the node.
 
 ### Frontend Node Enhancement
 Enhance nodes in `js/slowargo.js` using the `beforeRegisterNodeDef` hook, checking `nodeType?.comfyClass` to target specific nodes.
