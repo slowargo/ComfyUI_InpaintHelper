@@ -86,10 +86,14 @@
 }
 
 /* History list item row */
+/* 纵向内边距整体由 row 负责，text 只留横向：截断模式下 overflow 裁剪在 text 的
+   padding box 上，text 一旦有底部 padding 就会漏出第 6 行约 5px 的残影。
+   放在这里还能让行高不随截断开关变化（放 text 上的话短条目也会跟着变矮）。
+   取 8px 是为了让短条目行高维持在改动前的 35px：此时撑高的是 14px 的按钮而非文字。*/
 .slowargo-history-row {
     display: flex;
     align-items: center;
-    padding: 5px;
+    padding: 8px 5px;
     background: #353535;
     border-radius: 5px;
     /* overflow: hidden; // 确保子元素撑满时不会超出圆角 */
@@ -105,8 +109,8 @@
     display: flex;
     /* 关键：文字垂直居中 */
     align-items: center;
-    /* 这里保留你需要的文字上下边距 */
-    padding: 5px 5px;
+    /* 只留横向内边距，上下交给 row —— 原因见上面 .slowargo-history-row */
+    padding: 0 5px;
     cursor: pointer;
     font-size: 10px;
     color: #bbb;
@@ -114,9 +118,10 @@
     transition: background 0.2s;
 }
 
-/* 截断到 5 行。-webkit-line-clamp 要求 display:-webkit-box，会失去 flex 的垂直居中，
-   所以改用 align-self 把整块文字在行内居中。纵向 padding 必须去掉：overflow 裁剪在
-   padding box 上，留着底部 padding 会漏出第 6 行约 5px 的残影（横向 padding 无此问题）。*/
+/* 截断到 5 行。line-clamp 需要块级排版，基类那套 flex 垂直居中会失效，
+   所以改用 align-self 把整块文字在行内居中。
+   （新版 Chrome 走标准 line-clamp，computed display 其实是 flow-root 而非 -webkit-box，
+   但两条前缀写法都保留，兼容仍按 -webkit-box 解析的旧内核。）*/
 .slowargo-history-text.clamped {
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -124,7 +129,6 @@
     line-clamp: 5;
     align-self: center;
     overflow: hidden;
-    padding: 0 5px;
 }
 
 /* .slowargo-history-text:hover { */

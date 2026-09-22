@@ -1227,7 +1227,7 @@ app.registerExtension({
                         className: "slowargo-history-toggle",
                         title: "\u2702\ufe0f Long entries are cut off after 5 lines.\n"
                             + "Unchecked: every entry is shown in full.\n"
-                            + "Hover a cut-off entry to read all of it."
+                            + "Hover any entry to read it in full."
                     }, [clampTextCheckbox, $el("span", {
                         className: "slowargo-history-toggle-icon",
                         textContent: "\u2702\ufe0f"
@@ -1307,7 +1307,8 @@ app.registerExtension({
                             const text = $el("div", {
                                 textContent: item.content,
                                 className: `slowargo-history-text ${clamped ? "clamped" : ""}`,
-                                // 截断时用原生 tooltip 兜底，避免只看前 5 行分不清两条记录
+                                // 截断模式下统一挂 title（不逐条判断是否真被截），
+                                // 用原生 tooltip 兜底，避免只看前 5 行分不清两条记录
                                 title: clamped ? item.content : "",
                                 onclick: () => {
                                     this.widgets.find(w => w.name === "string").value = item.content;
