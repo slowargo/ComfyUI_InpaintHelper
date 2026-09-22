@@ -1525,6 +1525,10 @@ class InpaintRegionColorFix:
     # 即使在很小的区域上也是如此。区域越小，局部测量相对全局常数的优势反而越大，
     # 所以这里不该有一个会把小重绘挡在外面的门槛。
     MIN_INSIDE_SAMPLES = 64
+    # estimator=clip 迭代时，某通道截断后剩余像素少于此值就冻结该通道。与
+    # MIN_INSIDE_SAMPLES 同值纯属巧合：那个管核心区总体准入，这个管「还剩多少
+    # 样本才敢再走一步」。
+    MIN_CLIP_INLIERS = 64
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -1567,7 +1571,7 @@ class InpaintRegionColorFix:
                 }),
                 "clip_k": ("FLOAT", {
                     "default": 3.0, "min": 1.0, "max": 20.0, "step": 0.5,
-                    "tooltip": "For estimator=clip: how far a core pixel may sit from the current offset estimate before it is treated as repainted content and dropped, in units of the outside population's robust sigma. Smaller keeps less and rejects harder. The unit is taken from the outside, so the setting does not have to be retuned per image."
+                    "tooltip": "For estimator=clip: how far a core pixel may sit from the current offset estimate before it stops counting towards it, in units of the outside population's robust dispersion. That dispersion is small, so this is the width of a narrow mode-seeking window rather than an outlier threshold - the default already leaves most of the core out, and raising k widens the window without converging on the plain mean. Smaller rejects harder. Taking the unit from the outside keeps it meaningful across images of similar detail, but a core whose texture differs a lot from its surroundings will still need a different k."
                 }),
             },
         }
@@ -1588,33 +1592,58 @@ class InpaintRegionColorFix:
         # 估计量，内容方差不会抵消。
         return diff_hwc[selection].median(dim=0).values
 
-    @staticmethod
-    def _masked_clip(diff_hwc: torch.Tensor, selection: torch.Tensor,
-                     out_diff: torch.Tensor, k: float, iters: int = 12) -> torch.Tensor:
+    @classmethod
+    def _masked_clip(cls, diff_hwc: torch.Tensor, selection: torch.Tensor,
+                     out_diff: torch.Tensor, k: float, iters: int = 200):
         """中心自由的迭代截断：找核心区的主导偏移，把离它太远的像素当成重绘内容剔除。
 
         中心必须是自由参数。用「接近遮罩外基准」来筛像素会把待估的量当成筛选条件，
         估计量被结构性地拉回遮罩外值，无论真实偏移是多少都得到零——看着很稳，实则退化。
-        尺度取自遮罩外总体（那里没有内容变化，离散度就是纯测量噪声），所以 k 的含义
-        跨图一致，不必逐图重调。
+
+        尺度取自遮罩外的离散度。那里内容没有改动，所以离散度只反映重建误差而非重绘，
+        用它当单位比凭空给一个 Lab 绝对值合理；但它随局部细节密度变化，核心区的纹理
+        统计与遮罩外不同时，同一个 k 的实际松紧程度也会跟着变。
+
+        迭代是单调慢漂而非震荡，轮数上限必须给够：截断过早等于让「走了几步」成为
+        估计量定义的一部分，同一张图换个上限就是另一个答案。
+
+        返回 (center, info)。info 里带每通道保留像素数、实际轮数、以及哪些通道在第一
+        轮就被冻结（即该通道实际退化成了中位数），供 report 暴露出来——否则用户无法
+        知道自己选的 clip 到底跑成了什么。
         """
         din = diff_hwc[selection]
+        center = din.median(dim=0).values
         # 稳健 sigma：MAD 换算到正态等效标准差，不被遮罩外的少量坏像素带跑
         mad = (out_diff - out_diff.median(dim=0).values).abs().median(dim=0).values
         scale = (1.4826 * mad * k).clamp(min=1e-6)
-        center = din.median(dim=0).values
-        for _ in range(iters):
+
+        active = torch.ones_like(center, dtype=torch.bool)
+        n_keep = torch.full_like(center, float(din.shape[0]))
+        froze_at_once = torch.zeros_like(active)
+        used = 0
+        for it in range(iters):
             keep = (din - center).abs() <= scale
-            n_keep = keep.sum(dim=0)
-            # 任一通道筛得过狠就停在上一轮，别让估计量落到几个像素上
-            if bool((n_keep < 64).any()):
+            cnt = keep.sum(dim=0)
+            # 逐通道独立冻结，不是任一通道不行就整体放弃：默认 components=luminance
+            # 下 a*/b* 随后会被 keep 向量归零，让一个注定被丢弃的通道有权取消 L* 的
+            # 精修是错的。而 clip 的目标场景（少数区域被真重绘）往往正是色相替换，
+            # a*/b* 分布宽、L* 才是要估的量。
+            newly_frozen = active & (cnt < cls.MIN_CLIP_INLIERS)
+            if it == 0:
+                froze_at_once = newly_frozen.clone()
+            # 在冻结判定之后、break 之前记录：此时 active 仍含刚冻结的通道，report
+            # 里才看得到是「剩太少」才停的。全通道同时冻结时也不会漏记。
+            n_keep = torch.where(active, cnt.to(n_keep.dtype), n_keep)
+            active = active & ~newly_frozen
+            if not bool(active.any()):
                 break
-            nxt = (din * keep).sum(dim=0) / n_keep
-            if bool(((nxt - center).abs() < 1e-4).all()):
-                center = nxt
-                break
+            nxt = torch.where(active, (din * keep).sum(dim=0) / cnt.clamp(min=1), center)
+            moved = (nxt - center).abs() >= 1e-4
             center = nxt
-        return center
+            used = it + 1
+            if not bool((active & moved).any()):
+                break
+        return center, {"n_keep": n_keep, "iters": used, "froze": froze_at_once}
 
     @staticmethod
     def _fmt_delta(delta: torch.Tensor) -> str:
@@ -1692,8 +1721,10 @@ class InpaintRegionColorFix:
         for b in range(batch):
             n_out = int(outside[b].sum().item())
             flags = []
+            clip_note = ""
 
-            if n_out >= min_outside:
+            outside_ok = n_out >= min_outside
+            if outside_ok:
                 delta_out = (self._masked_mean(lab_ref[b], outside[b], n_out)
                              - self._masked_mean(lab_img[b], outside[b], n_out))
             else:
@@ -1722,7 +1753,19 @@ class InpaintRegionColorFix:
                         delta_in = self._masked_median(lab_ref[b] - lab_img[b], inside[b])
                     elif estimator == "clip":
                         diff_b = lab_ref[b] - lab_img[b]
-                        delta_in = self._masked_clip(diff_b, inside[b], diff_b[outside[b]], clip_k)
+                        if outside_ok:
+                            delta_in, info = self._masked_clip(
+                                diff_b, inside[b], diff_b[outside[b]], clip_k)
+                            clip_note = " clip[keep={} it={}]".format(
+                                "/".join(f"{int(v)}" for v in info["n_keep"].tolist()),
+                                info["iters"])
+                            if bool(info["froze"].any()):
+                                flags.append("CLIP_AT_MEDIAN")
+                        else:
+                            # 尺度取自遮罩外的离散度；那里的样本连均值都测不出来，
+                            # 更给不出可信的离散度。退回中位数而不是崩掉。
+                            delta_in = self._masked_median(diff_b, inside[b])
+                            flags.append("CLIP_NO_SCALE")
                     else:
                         delta_in = (self._masked_mean(lab_ref[b], inside[b], n_in)
                                     - self._masked_mean(lab_img[b], inside[b], n_in))
@@ -1766,7 +1809,7 @@ class InpaintRegionColorFix:
             suffix = (" " + " ".join(flags)) if flags else ""
             report_lines.append(
                 f"[{b}] n_out={n_out} n_in={n_in} | outside {self._fmt_delta(delta_out)} "
-                f"| inside {self._fmt_delta(delta_in)}{suffix}"
+                f"| inside {self._fmt_delta(delta_in)}{clip_note}{suffix}"
             )
 
         # L* 平移会把高光推出色域：R/G 截到 1.0 而 B 仍在上升，净效果是色相/饱和度
