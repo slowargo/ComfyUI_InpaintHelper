@@ -82,19 +82,32 @@ class MaskedColorMatch:
                 "reference": ("IMAGE", {"tooltip": "The original image before VAE encode, same framing as image."}),
                 "mode": (["offset_only", "gain_offset"], {
                     "default": "offset_only",
-                    "tooltip": "offset_only fits a per-channel constant shift (recommended, matches the measured VAE bias). gain_offset also fits a slope, which needs a well-textured sample region to be reliable."
+                    "tooltip": (
+                        "offset_only fits a per-channel constant shift (recommended, matches the "
+                        "measured VAE bias). gain_offset also fits a slope, which needs a "
+                        "well-textured sample region to be reliable."
+                    )
                 }),
                 "strength": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "Blends the correction: 0 leaves the image untouched, 1 applies the full fit."
+                    "tooltip": (
+                        "Blends the correction: 0 leaves the image untouched, 1 applies the full "
+                        "fit."
+                    )
                 }),
                 "mask_threshold": ("FLOAT", {
                     "default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Only pixels whose mask value is at or below this are used to fit the correction. Keep it low so that repainted pixels never enter the fit."
+                    "tooltip": (
+                        "Only pixels whose mask value is at or below this are used to fit the "
+                        "correction. Keep it low so that repainted pixels never enter the fit."
+                    )
                 }),
             },
             "optional": {
-                "mask": ("MASK", {"tooltip": "The inpaint mask. Without it the fit uses the whole image, which lets repainted content distort the result."}),
+                "mask": ("MASK", {"tooltip": (
+                    "The inpaint mask. Without it the fit uses the whole image, which lets "
+                    "repainted content distort the result."
+                )}),
             },
         }
 
@@ -102,7 +115,10 @@ class MaskedColorMatch:
     RETURN_NAMES = ("image", "report")
     FUNCTION = "match_color"
     CATEGORY = "Slowargo"
-    DESCRIPTION = "Remove the VAE roundtrip color drift from an inpaint result by fitting a per-channel linear correction on the pixels outside the mask, then applying it to the whole image."
+    DESCRIPTION = (
+        "Remove the VAE roundtrip color drift from an inpaint result by fitting a per-channel "
+        "linear correction on the pixels outside the mask, then applying it to the whole image."
+    )
 
     def _sample_region(self, mask, batch, height, width, mask_threshold, device):
         """遮罩外像素的选取。返回 [B,H,W] 的 bool。"""
@@ -274,42 +290,103 @@ class InpaintRegionColorFix:
             "required": {
                 "image": ("IMAGE", {"tooltip": "The VAE-decoded inpaint result to correct."}),
                 "reference": ("IMAGE", {"tooltip": "The original image before VAE encode, same framing as image."}),
-                "mask": ("MASK", {"tooltip": "The inpaint mask. Its feather is used as the blend ramp between the outside and inside baselines."}),
+                "mask": ("MASK", {"tooltip": (
+                    "The inpaint mask. Its feather is used as the blend ramp between the outside "
+                    "and inside baselines."
+                )}),
                 "components": (["luminance", "luminance_and_chroma"], {
                     "default": "luminance",
-                    "tooltip": "luminance shifts L* only, so hue and saturation are left alone except where the shift pushes a pixel out of gamut - the safe default, since L* drift is the only part that measures as systematic. luminance_and_chroma also pulls a*/b* back, which fixes colour casts but undoes intentional colour changes in the repainted area."
+                    "tooltip": (
+                        "luminance shifts L* only, so hue and saturation are left alone except "
+                        "where the shift pushes a pixel out of gamut - the safe default, since L* "
+                        "drift is the only part that measures as systematic. luminance_and_chroma "
+                        "also pulls a*/b* back, which fixes colour casts but undoes intentional "
+                        "colour changes in the repainted area."
+                    )
                 }),
                 "inside_source": (["fit", "manual"], {
                     "default": "fit",
-                    "tooltip": "fit measures the repainted core's baseline from the image, which assumes repainting should not change the region's mean. manual ignores the core entirely and uses inside_offset_l as the baseline shift, so it never fights an intentional colour change - but it has to be calibrated per model/sampler/steps/denoise."
+                    "tooltip": (
+                        "fit measures the repainted core's baseline from the image, which assumes "
+                        "repainting should not change the region's mean. manual ignores the core "
+                        "entirely and uses inside_offset_l as the baseline shift, so it never "
+                        "fights an intentional colour change - but it has to be calibrated per "
+                        "model/sampler/steps/denoise."
+                    )
                 }),
                 "inside_offset_l": ("FLOAT", {
                     "default": 0.0, "min": -50.0, "max": 50.0, "step": 0.1,
-                    "tooltip": "Baseline shift for the repainted core, in Lab L* units; positive brightens. Added on top of the measured shift in fit mode, used as the whole shift in manual mode."
+                    "tooltip": (
+                        "Baseline shift for the repainted core, in Lab L* units; positive "
+                        "brightens. Added on top of the measured shift in fit mode, used as the "
+                        "whole shift in manual mode."
+                    )
                 }),
                 "strength": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "Blends the correction: 0 returns the input untouched, 1 applies the full baseline shift."
+                    "tooltip": (
+                        "Blends the correction: 0 returns the input untouched, 1 applies the full "
+                        "baseline shift."
+                    )
                 }),
                 "outside_threshold": ("FLOAT", {
                     "default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Mask values at or below this define the outside population, whose baseline shift is a real measurement. Must stay below inside_threshold."
+                    "tooltip": (
+                        "Mask values at or below this define the outside population, whose "
+                        "baseline shift is a real measurement. Must stay below inside_threshold."
+                    )
                 }),
                 "inside_threshold": ("FLOAT", {
                     "default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01,
-                    "tooltip": "Mask values at or above this define the repainted core, whose baseline shift is an assumption. A mask whose peak never reaches this value gets no inside correction - which is correct, since such a mask barely repaints anything."
+                    "tooltip": (
+                        "Mask values at or above this define the repainted core, whose baseline "
+                        "shift is an assumption. A mask whose peak never reaches this value gets "
+                        "no inside correction - which is correct, since such a mask barely "
+                        "repaints anything."
+                    )
                 }),
                 "max_excess": ("FLOAT", {
                     "default": 8.0, "min": 0.0, "max": 100.0, "step": 0.5,
-                    "tooltip": "Cap, in Lab units, on how far the repainted core's baseline may sit from the outside one; 0 disables the cap. Drift alone stays well inside it, so the cap only binds when the repaint really changed the content - it then limits the damage instead of letting the correction undo that change. For heavy content replacement, inside_source=manual is still better."
+                    "tooltip": (
+                        "Cap, in Lab units, on how far the repainted core's baseline may sit from "
+                        "the outside one; 0 disables the cap. Drift alone stays well inside it, "
+                        "so the cap only binds when the repaint really changed the content - it "
+                        "then limits the damage instead of letting the correction undo that "
+                        "change. For heavy content replacement, inside_source=manual is still "
+                        "better."
+                    )
                 }),
                 "estimator": (["mean", "median", "clip"], {
                     "default": "mean",
-                    "tooltip": "How the repainted core's baseline is summarised. mean is marginally more accurate when the repaint only refined detail, but it tracks any real content change one-for-one and is unbounded. median gives that up for a small, fixed cost and stays close to the drift even when part of the region was genuinely repainted. clip assumes the repaint only altered part of the region: it locks onto the dominant offset and discards pixels that moved far from it, controlled by clip_k. Pick it when a minority of the core was really repainted and the rest only drifted. If instead the whole region was reworked there is no untouched majority to lock onto, and it latches onto whichever mode dominates and over-corrects past mean - so this is a scenario switch, not a safer default. Only affects the core - the outside baseline always uses the mean, where there is no content change to be robust against."
+                    "tooltip": (
+                        "How the repainted core's baseline is summarised. mean is marginally more "
+                        "accurate when the repaint only refined detail, but it tracks any real "
+                        "content change one-for-one and is unbounded. median gives that up for a "
+                        "small, fixed cost and stays close to the drift even when part of the "
+                        "region was genuinely repainted. clip assumes the repaint only altered "
+                        "part of the region: it locks onto the dominant offset and discards "
+                        "pixels that moved far from it, controlled by clip_k. Pick it when a "
+                        "minority of the core was really repainted and the rest only drifted. If "
+                        "instead the whole region was reworked there is no untouched majority to "
+                        "lock onto, and it latches onto whichever mode dominates and "
+                        "over-corrects past mean - so this is a scenario switch, not a safer "
+                        "default. Only affects the core - the outside baseline always uses the "
+                        "mean, where there is no content change to be robust against."
+                    )
                 }),
                 "clip_k": ("FLOAT", {
                     "default": 3.0, "min": 1.0, "max": 20.0, "step": 0.5,
-                    "tooltip": "For estimator=clip: how far a core pixel may sit from the current offset estimate before it stops counting towards it, in units of the outside population's robust dispersion. That dispersion is small, so this is the width of a narrow mode-seeking window rather than an outlier threshold - the default already leaves most of the core out, and raising k widens the window without converging on the plain mean. Smaller rejects harder. Taking the unit from the outside keeps it meaningful across images of similar detail, but a core whose texture differs a lot from its surroundings will still need a different k."
+                    "tooltip": (
+                        "For estimator=clip: how far a core pixel may sit from the current offset "
+                        "estimate before it stops counting towards it, in units of the outside "
+                        "population's robust dispersion. That dispersion is small, so this is the "
+                        "width of a narrow mode-seeking window rather than an outlier threshold - "
+                        "the default already leaves most of the core out, and raising k widens "
+                        "the window without converging on the plain mean. Smaller rejects harder. "
+                        "Taking the unit from the outside keeps it meaningful across images of "
+                        "similar detail, but a core whose texture differs a lot from its "
+                        "surroundings will still need a different k."
+                    )
                 }),
             },
         }
@@ -318,7 +395,11 @@ class InpaintRegionColorFix:
     RETURN_NAMES = ("image", "report")
     FUNCTION = "fix_region"
     CATEGORY = "Slowargo"
-    DESCRIPTION = "Pull the repainted region's colour baseline back to the original in Lab space, ramping the correction by mask value so the feathered edge stays seamless. Corrects the sampler-induced drift that MaskedColorMatch cannot see."
+    DESCRIPTION = (
+        "Pull the repainted region's colour baseline back to the original in Lab space, ramping "
+        "the correction by mask value so the feathered edge stays seamless. Corrects the "
+        "sampler-induced drift that MaskedColorMatch cannot see."
+    )
 
     @staticmethod
     def _masked_mean(lab_hwc: torch.Tensor, selection: torch.Tensor, count: int) -> torch.Tensor:
@@ -420,7 +501,8 @@ class InpaintRegionColorFix:
         ref = reference.float().to(img.device).clamp(0.0, 1.0)
         if ref.shape[1:3] != (height, width):
             logger.warning(
-                f"[InpaintRegionColorFix] reference size {tuple(ref.shape[1:3])} != image size {(height, width)}, resizing reference"
+                f"[InpaintRegionColorFix] reference size {tuple(ref.shape[1:3])} "
+                f"!= image size {(height, width)}, resizing reference"
             )
             ref = _resize_bchw_to(ref.permute(0, 3, 1, 2), (height, width)).permute(0, 2, 3, 1)
         ref = _broadcast_batch(ref, batch, "reference")

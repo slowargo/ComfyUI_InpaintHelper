@@ -108,7 +108,8 @@ class RememberStrings:
             file_name = match.group(1).strip()  # 提取文件名部分并去除空格
             folder_type = match.group(2).lower()  # 提取 [] 中的内容并转为小写
 
-            base_dir = folder_paths.get_input_directory() if folder_type == "input" else folder_paths.get_output_directory()
+            base_dir = (folder_paths.get_input_directory() if folder_type == "input"
+                        else folder_paths.get_output_directory())
 
             # logger.info(f"[RememberStrings] base_dir:{base_dir} file_name:{file_name}")
 

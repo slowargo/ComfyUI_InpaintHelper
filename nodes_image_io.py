@@ -316,7 +316,8 @@ class LoadImageFromOutputsPlus(io.ComfyNode):
 
             # image_folder as default folder
             image_path = folder_paths.get_annotated_filepath(image, def_dir)
-            # logger.info(f"[LoadImageFromOutputsPlus] image:{image} image_folder:{image_folder} def_dir: {def_dir} -> {image_path}")
+            # logger.info(f"[LoadImageFromOutputsPlus] image:{image} "
+            #             f"image_folder:{image_folder} def_dir: {def_dir} -> {image_path}")
 
             output_image, output_mask, _ = process_image_to_tensor(image_path)
         
@@ -355,7 +356,11 @@ class LoadImageFromOutputPlusV1(nodes.LoadImage):
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING")
     RETURN_NAMES = ("IMAGE", "MASK", "File Name", "Meta Data")
-    DESCRIPTION = "Load an image from the output folder. When the refresh button is clicked, the node will update the image list (takes 10 from output folder and 3 from clipspace folder) and automatically select the first image, allowing for easy iteration."
+    DESCRIPTION = (
+        "Load an image from the output folder. When the refresh button is clicked, the node will "
+        "update the image list (takes 10 from output folder and 3 from clipspace folder) and "
+        "automatically select the first image, allowing for easy iteration."
+    )
     EXPERIMENTAL = True
     FUNCTION = "load_image"
     CATEGORY = "Slowargo"
@@ -409,7 +414,11 @@ class LoadRecentImagePlusV1(nodes.LoadImage):
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING", "STRING")
     RETURN_NAMES = ("IMAGE", "MASK", "File Name", "Meta Data")
-    DESCRIPTION = "Load an image from the output folder. When the refresh button is clicked, the node will update the image list and automatically select the first image, allowing for easy iteration."
+    DESCRIPTION = (
+        "Load an image from the output folder. When the refresh button is clicked, the node will "
+        "update the image list and automatically select the first image, allowing for easy "
+        "iteration."
+    )
     EXPERIMENTAL = True
     FUNCTION = "load_image"
     CATEGORY = "Slowargo"

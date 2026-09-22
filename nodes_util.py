@@ -127,7 +127,10 @@ class FloatSwitch:
                     "default": False,
                     "label_on": "ON",
                     "label_off": "OFF",
-                    "tooltip": "Outputs Float A when on, Float B when off. Overrides with float_ovr if > 0."
+                    "tooltip": (
+                        "Outputs Float A when on, Float B when off. Overrides with float_ovr if > "
+                        "0."
+                    )
                 }),
             },
             "optional": {
@@ -163,7 +166,8 @@ class FloatSwitch:
             selected = float_ovr
 
         # logger.info(f"[FloatSwitch] node_id:{node_id} selected:{selected}")
-        # PromptServer.instance.send_sync("slowargo.js.extension.FloatSwitch", {"node_id": node_id, "selected_value": selected})
+        # PromptServer.instance.send_sync("slowargo.js.extension.FloatSwitch",
+        #                                {"node_id": node_id, "selected_value": selected})
 
         return (selected,)
 
@@ -303,7 +307,10 @@ class RefreshTriggerV1:
         }
 
     RETURN_TYPES = ()
-    DESCRIPTION = "Remote refresh trigger for Load Recent Image node. Use the refresh button to trigger the connected Load Recent Image node's refresh with this node's watch_folders configuration."
+    DESCRIPTION = (
+        "Remote refresh trigger for Load Recent Image node. Use the refresh button to trigger the "
+        "connected Load Recent Image node's refresh with this node's watch_folders configuration."
+    )
     FUNCTION = "execute"
     CATEGORY = "Slowargo"
     OUTPUT_NODE = True
