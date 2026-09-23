@@ -7,7 +7,8 @@ import { ComfyWidgets } from "../../scripts/widgets.js";
 const LOG_PREFIX = "[WidgetPreset]";
 const TARGET_SLOT_PREFIX = "preset_target_";
 const EMPTY_SLOT_LABEL = "+ connect";
-const SHOW_DEBUG_PROPERTY = "showDebug";
+// One context menu switch shows or hides both the filter and the debug info
+const SHOW_EDITOR_PROPERTY = "showEditor";
 const MAX_ENUMERATED_WIDGETS = 15;
 const MANY_PRESETS_HINT = 12;
 const NUMBER_EPSILON = 1e-9;
@@ -25,6 +26,21 @@ const EXCLUDED_WIDGET_TYPES = new Set([
 // Preset nodes currently in a graph, refreshed together whenever the change tracker reports a change
 const livePresetNodes = new Set();
 let graphChangedListenerRegistered = false;
+
+// A node that is still in a graph of the open workflow. Clearing the root graph calls onRemoved only for its
+// own nodes, so nodes inside a discarded subgraph never leave livePresetNodes on their own.
+const isAttached = (app, node) => {
+    const graph = node.graph;
+    let root;
+    try {
+        root = app.rootGraph;
+    } catch {
+        return false;
+    }
+    if (!graph || !root) return false;
+    const reachable = graph === root || root.subgraphs?.get(graph.id) === graph;
+    return reachable && graph.getNodeById(node.id) === node;
+};
 
 // The legacy canvas hides on widget.hidden, the Vue node renderer on widget.options.hidden. The Vue side
 // only re-reads widgets when the node's (shallowReactive) widgets array changes. Putting the same object
@@ -195,7 +211,13 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
         graphChangedListenerRegistered = true;
         // Fired on every captured change, which covers widget edits, queueing and undo/redo
         api.addEventListener("graphChanged", () => {
-            for (const node of livePresetNodes) node.slowargoWidgetPreset?.scheduleUpdate();
+            for (const node of livePresetNodes) {
+                if (!isAttached(app, node)) {
+                    livePresetNodes.delete(node);
+                    continue;
+                }
+                node.slowargoWidgetPreset?.scheduleUpdate();
+            }
         });
     }
 
@@ -214,7 +236,7 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
         // Never sent to the backend; see the design doc for why this is safe
         node.isVirtualNode = true;
         node.properties ??= {};
-        node.properties[SHOW_DEBUG_PROPERTY] ??= true;
+        node.properties[SHOW_EDITOR_PROPERTY] ??= true;
 
         setWidgetHidden(node, presetsWidget, true);
         if (filterWidget.inputEl) {
@@ -268,11 +290,14 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                 fn();
                 return;
             }
+            // Taken before fn(): addInput()/addWidget() call expandToFitContent() themselves, so node.size
+            // afterwards may already include the growth and adding the delta again would count it twice
+            const heightBefore = node.size[1];
             const before = node.computeSize()[1];
             fn();
             const after = node.computeSize()[1];
             if (after !== before) {
-                node.setSize([node.size[0], Math.max(after, node.size[1] + after - before)]);
+                node.setSize([node.size[0], Math.max(after, heightBefore + after - before)]);
             }
         };
 
@@ -359,11 +384,12 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             });
         };
 
-        const applyDebugVisibility = () => {
-            const show = node.properties?.[SHOW_DEBUG_PROPERTY] !== false;
-            if (Boolean(debugWidget.hidden) === !show) return;
+        const applyEditorVisibility = () => {
+            const show = node.properties?.[SHOW_EDITOR_PROPERTY] !== false;
+            const editorWidgets = [filterWidget, debugWidget];
+            if (editorWidgets.every((widget) => Boolean(widget.hidden) === !show)) return;
             resizeAround(() => {
-                setWidgetHidden(node, debugWidget, !show);
+                for (const widget of editorWidgets) setWidgetHidden(node, widget, !show);
             });
             state.lastDebugText = null;
         };
@@ -433,7 +459,7 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             const rules = parseRules(filterWidget.value);
             const presets = readPresets();
             rebuildPresetButtons(presets.data.items);
-            applyDebugVisibility();
+            applyEditorVisibility();
 
             const rows = collectRows(targets, rules);
             const matchedCount = rows.filter((row) => row.matched).length;
@@ -493,10 +519,10 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             const escapedTitle = escapeRegExp(target.title ?? "");
             const prefixes = [`^${escapedTitle}/`, `${escapedTitle}/`].map((prefix) => prefix.toLowerCase());
             const lines = String(filterWidget.value ?? "").split(/\r?\n/);
+            // Exclude lines select nothing, so only an include line counts as a rule for this title
             const hasRule = lines.some((line) => {
-                let trimmed = line.trim();
-                if (trimmed.startsWith("-")) trimmed = trimmed.slice(1).trim();
-                return prefixes.some((prefix) => trimmed.toLowerCase().startsWith(prefix));
+                const trimmed = line.trim().toLowerCase();
+                return prefixes.some((prefix) => trimmed.startsWith(prefix));
             });
             if (hasRule) return;
 
@@ -546,11 +572,14 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             if (rules.error) return;
             if (!Object.keys(snapshotSelection().nodes).length) return;
 
-            const items = presets.data.items;
-            const defaultName = `Preset ${items.length + 1}`;
+            const defaultName = `Preset ${presets.data.items.length + 1}`;
             askName(app, "Preset name", defaultName, event, (name) => {
                 if (!name) return;
-                // Read again: the dialog may have stayed open while values changed
+                // Read everything again: the canvas prompt is not modal, so values, rules and even the presets
+                // themselves (rename/delete from the context menu) may have changed while it was open
+                const latest = readPresets();
+                if (latest.error) return;
+                const items = latest.data.items;
                 const { nodes, targets } = snapshotSelection();
                 if (!Object.keys(nodes).length) return;
 
@@ -568,7 +597,7 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                     items.push({ name, nodes });
                 }
                 state.lastApply = null;
-                writePresets(presets.data);
+                writePresets(latest.data);
             });
         };
 
@@ -597,8 +626,14 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                             skipped.push(`${target.title} #${nodeId}/${widgetName}: ${shown} is not an option`);
                             continue;
                         }
-                        widget.value = value;
-                        widget.callback?.(value, app.canvas, target);
+                        if (typeof widget.setValue === "function") {
+                            // Also syncs options.property (restored over the value on load), notifies
+                            // node.onWidgetChanged and bumps graph._version
+                            widget.setValue(value, { e: undefined, node: target, canvas: app.canvas });
+                        } else {
+                            widget.value = value;
+                            widget.callback?.(value, app.canvas, target);
+                        }
                         applied++;
                     }
                 }
@@ -664,10 +699,12 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             // Rebuild right away so the restored size is read against the full widget list. Doing it in the
             // deferred update() instead would add the buttons' height on top of a size that already has it,
             // growing the node on every load.
+            // Visibility first: every addWidget() in the rebuild calls expandToFitContent(), which would
+            // otherwise measure the filter and debug info as visible and stretch a node saved with them hidden.
             state.resizeSuppressed = true;
             try {
+                applyEditorVisibility();
                 rebuildPresetButtons(readPresets().data.items);
-                applyDebugVisibility();
             } finally {
                 state.resizeSuppressed = false;
             }
@@ -729,11 +766,11 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             }
             // resizeAround() sits out while collapsed, so toggling there would leave a stale height
             if (!node.flags?.collapsed) {
-                const shown = node.properties?.[SHOW_DEBUG_PROPERTY] !== false;
+                const shown = node.properties?.[SHOW_EDITOR_PROPERTY] !== false;
                 entries.push({
-                    content: shown ? "🐞 Hide debug info" : "🐞 Show debug info",
+                    content: shown ? "🧩 Hide filter & debug info" : "🧩 Show filter & debug info",
                     callback: () => {
-                        node.properties[SHOW_DEBUG_PROPERTY] = !shown;
+                        node.properties[SHOW_EDITOR_PROPERTY] = !shown;
                         update();
                         node.setDirtyCanvas(true, true);
                     },
@@ -744,7 +781,7 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
 
         node.slowargoWidgetPreset = { scheduleUpdate };
         statusWidget.label = "No nodes connected";
-        applyDebugVisibility();
+        applyEditorVisibility();
         return result;
     };
 }
