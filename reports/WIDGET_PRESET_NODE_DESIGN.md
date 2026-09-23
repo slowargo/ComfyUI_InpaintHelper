@@ -235,6 +235,18 @@ Python 这边只是个空壳，功能全在前端。保留它是为了让节点�
 调试文本区照 rgthree Display Any 的写法：`ComfyWidgets.STRING` 建一个多行文本，`inputEl.readOnly = true`。
 1.37.2 里这两样都还在（`widgets.ts:292`、`domWidget.ts:51`）。
 
+### 去掉 `filter` 和 `presets` 的输入口
+
+前端会给每个声明的 widget 配一个同名输入口。这两个输入口对本节点没有用（节点不执行，连进来的值不会被读取），
+而且 widget 隐藏后会出问题：布局只更新可见 widget 的位置（`LGraphNode.ts:4096-4099`），给 widget 输入口定位时
+却遍历所有 widget（`:4134-4140`），于是隐藏的 widget 的输入口停在它隐藏前的位置；悬停提示和连线落点又是按输入口
+位置判断的，不看是否可见（`measureSlots.ts:17-28`）。结果是在那片区域悬停会弹出 `filter` 的提示，拖线松手也可能
+落到这两个隐藏的输入口上。
+
+节点定义里的 `socketless` 选项本可以避免创建输入口（`litegraphService.ts:180`），但 1.37.2 的字符串 widget 创建时
+不会把它带进 `widget.options`，声明了也不生效。所以在 `onNodeCreated` 里直接移除这两个输入口；更早保存的 workflow
+读档时会把它们作为额外输入恢复回来，`onConfigure` 里再移除一次。`removeInput` 会同步修正后面连线的槽位序号。
+
 ### 动态输入槽
 
 照 rgthree `base_any_input_connected_node.js` 的 `stabilizeInputsOutputs()` 来做：
@@ -472,6 +484,7 @@ Vue 模式下按钮文字能不能跟着更新，取决于 `WidgetButton.vue` �
 | 隐藏 `presets` | legacy 画布看 `widget.hidden`，Vue 渲染层看 `widget.options.hidden`（`NodeWidgets.vue:28`），两个都要设。Vue 层只在 widgets 数组变化时才重新读取，所以运行时切换显示后要把 widget 从数组里取出再插回 |
 | 调试文本区在 Vue 模式下 | Vue 用自己的文本框渲染，`inputEl` 上的只读和等宽字体不生效。只读改用 `options.read_only`；等宽字体在 Vue 模式下没有，列对不齐，只影响观感 |
 | 输入槽加 label | 读档、撤销、重做后连线和 label 都正常 |
+| 隐藏后的悬停提示 | 隐藏 `filter` 后，在它原来输入口的位置悬停会弹出 `filter` 的提示。移除两个 widget 输入口后不再出现；带着这两个输入口保存的旧 workflow 读档后会被去掉，原有连线保留 |
 | `control_after_generate` | 前端给它设了 `options.serialize = false`，被 7.2 的条件 2 自动排除，所以 Apply 不会改动随机策略。代价是 seed 写进去后，如果随机策略是 randomize，下次运行 seed 会再被改掉 |
 | 按钮回调没有事件 / 画布未激活 | `canvas.prompt` 依赖 `LGraphCanvas.active_canvas`，画布上没有过鼠标操作时它为空，调用会报错。此时改用浏览器自带的 `prompt` |
 | 自动追加规则和撤销 | 未测。连线触发的规则追加是否和连线在同一条撤销记录里还不确定 |
@@ -580,3 +593,5 @@ Vue 模式下按钮文字能不能跟着更新，取决于 `WidgetButton.vue` �
 20. **根据代码评审修正。** 调整高度时在改动前记下原高度，避免重复增高；读档时先恢复隐藏状态再重建按钮；
     清理残留在 subgraph 里的失效节点；Apply 改用 `widget.setValue`；保存时重新读取预设数据；
     判断是否已有规则时不再把排除行算在内
+21. **去掉 `filter` 和 `presets` 的输入口。** 隐藏后它们的输入口停留在旧位置，会误弹提示、误接连线；
+    `socketless` 在 1.37.2 的字符串 widget 上不生效，改为在前端移除

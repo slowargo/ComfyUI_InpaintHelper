@@ -238,6 +238,19 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
         node.properties ??= {};
         node.properties[SHOW_EDITOR_PROPERTY] ??= true;
 
+        // The frontend gives every declared widget an input socket, and those are useless here: the node never
+        // runs, so nothing linked into them is ever read. They also get in the way once hidden: layout only
+        // repositions visible widgets, but still places a widget's socket at that widget's last y, so a hidden
+        // filter/presets socket keeps catching hover (its tooltip) and link drops over whatever is drawn there
+        // now. `socketless` cannot be declared instead, the 1.37.2 string widgets drop it from their options.
+        const removeWidgetSockets = () => {
+            for (let index = (node.inputs?.length ?? 0) - 1; index >= 0; index--) {
+                const widgetName = node.inputs[index].widget?.name;
+                if (widgetName === filterWidget.name || widgetName === presetsWidget.name) node.removeInput(index);
+            }
+        };
+        removeWidgetSockets();
+
         setWidgetHidden(node, presetsWidget, true);
         if (filterWidget.inputEl) {
             filterWidget.inputEl.placeholder = "One regex per line: node title/widget name";
@@ -703,6 +716,8 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             // otherwise measure the filter and debug info as visible and stretch a node saved with them hidden.
             state.resizeSuppressed = true;
             try {
+                // Workflows saved before the sockets were removed bring them back as extra inputs
+                removeWidgetSockets();
                 applyEditorVisibility();
                 rebuildPresetButtons(readPresets().data.items);
             } finally {
