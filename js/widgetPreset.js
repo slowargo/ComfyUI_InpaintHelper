@@ -11,6 +11,8 @@ const EMPTY_SLOT_LABEL = "+ connect";
 const SHOW_EDITOR_PROPERTY = "showEditor";
 const MAX_ENUMERATED_WIDGETS = 15;
 const MANY_PRESETS_HINT = 12;
+// Tooltips vanish on the next mouse move and cannot scroll, so keep them short; the debug info has it all
+const MAX_TOOLTIP_LINES = 30;
 const NUMBER_EPSILON = 1e-9;
 const MAX_PASS_THROUGH_HOPS = 32;
 const UPDATE_DELAY_MS = 50;
@@ -182,6 +184,27 @@ const isPresetActive = (item, targets) => {
         }
     }
     return located > 0;
+};
+
+const capLines = (lines) =>
+    lines.length > MAX_TOOLTIP_LINES
+        ? [...lines.slice(0, MAX_TOOLTIP_LINES - 1), `… ${lines.length - MAX_TOOLTIP_LINES + 1} more`]
+        : lines;
+
+// What a preset holds, with × on what Apply would skip right now. Not compared with current values.
+const describePreset = (item, targets) => {
+    const lines = [];
+    for (const [nodeId, record] of Object.entries(item.nodes)) {
+        const nodeReachable = targets.has(String(nodeId));
+        lines.push(`${nodeReachable ? "" : "× "}${record?.title ?? "?"} #${nodeId}`);
+        for (const [widgetName, value] of Object.entries(record?.widgets ?? {})) {
+            // An unreachable node is already marked on its own line
+            const { widget } = locateWidget(targets, nodeId, widgetName);
+            const valid = !nodeReachable || (widget && comboAccepts(widget, value));
+            lines.push(`  ${valid ? "" : "× "}${widgetName} = ${formatValue(value)}`);
+        }
+    }
+    return capLines(lines).join("\n");
 };
 
 const withUndoTransaction = (app, fn) => {
@@ -423,6 +446,25 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             return rows;
         };
 
+        // Short form of the debug info for the status line's tooltip, so it can be read with the debug info
+        // hidden: only what is selected, excluded or unsupported, plus problems and the last Apply's skips
+        const buildStatusTooltip = ({ unresolved }, rules, presets, rows) => {
+            const lines = [];
+            if (presets.error) lines.push(`⚠ Preset data unreadable: ${presets.error}`);
+            if (rules.error) lines.push(`⚠ Rule line ${rules.error.line}: ${rules.error.message}`);
+            if (unresolved) lines.push(`⚠ ${unresolved} link(s) do not lead to a regular node`);
+            for (const row of rows) {
+                if (row.matched) lines.push(`✓ ${row.path} = ${formatValue(row.widget.value)}`);
+                else if (row.excludedBy) lines.push(`− ${row.path} (${row.excludedBy})`);
+                else if (row.unsupported) lines.push(`× ${row.path} (unsupported)`);
+            }
+            if (state.lastApply?.skipped.length) {
+                const { name, applied, total, skipped } = state.lastApply;
+                lines.push(`Last apply "${name}": ${applied}/${total}`, ...skipped.map((entry) => `× ${entry}`));
+            }
+            return capLines(lines).join("\n");
+        };
+
         const buildDebugText = ({ targets, unresolved }, rules, presets, rows) => {
             const lines = [];
             if (presets.error) {
@@ -498,9 +540,13 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                 needsRedraw = true;
             }
 
+            // Read by the canvas at hover time, so plain assignment needs no redraw
+            statusWidget.tooltip = buildStatusTooltip(collected, rules, presets, rows);
+
             presets.data.items.forEach((item, index) => {
                 const button = state.presetButtons[index];
                 if (!button) return;
+                button.tooltip = describePreset(item, targets);
                 const label = `${isPresetActive(item, targets) ? "●" : "○"} ${item.name}`;
                 if (button.label !== label) {
                     button.label = label;
