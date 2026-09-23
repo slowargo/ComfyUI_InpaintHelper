@@ -7,6 +7,7 @@ WEB_DIRECTORY。节点实现按职责分在下面这几个模块里：
     nodes_image_io.py  图像读取、最近文件枚举，以及刷新预览的路由
     nodes_save.py      图像保存、服务端文件搬运，以及搬运路由
     nodes_strings.py   字符串记忆，以及它的历史记录路由
+    nodes_preset.py    Widget Preset 的节点声明（功能全在前端）
     nodes_util.py      浮点开关/选择器、触发器、历史清理、SSIM 比较
 
 注意：API 路由是在模块 import 时注册的副作用。下面每一行导入看起来「只用到
@@ -31,6 +32,7 @@ from .nodes_image_io import (
     LoadRecentImagePlusV1,
 )
 from .nodes_strings import RememberStrings
+from .nodes_preset import WidgetPreset
 
 
 ##############################################
@@ -71,6 +73,7 @@ NODE_CLASS_MAPPINGS = {
     "ClearHistoryNode": ClearHistoryNode,
     "MaskedColorMatch": MaskedColorMatch,
     "InpaintRegionColorFix": InpaintRegionColorFix,
+    "WidgetPreset": WidgetPreset,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -90,4 +93,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ClearHistoryNode": "Clear History",
     "MaskedColorMatch": "Masked Color Match (Inpaint Drift Fix)",
     "InpaintRegionColorFix": "Inpaint Region Color Fix",
+    "WidgetPreset": "Widget Preset",
 }

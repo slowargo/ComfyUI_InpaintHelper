@@ -18,7 +18,10 @@ ComfyUI_InpaintHelper is a ComfyUI extension that provides utility nodes for enh
 - **`nodes_save.py`**: Image saving, server-side file transfer, and the transfer route
 - **`nodes_strings.py`**: String memory and its history routes
 - **`nodes_util.py`**: Float switch/selector, triggers, history clearing, SSIM comparison
+- **`nodes_preset.py`**: Declaration of the Widget Preset node; all of its logic lives in `js/widgetPreset.js`
 - **`js/slowargo.js`**: Main frontend extension for node UI enhancements, keyboard shortcuts, and general ComfyUI integration
+- **`js/widgetPreset.js`**: Widget Preset frontend (regex-selected widget snapshots, apply, highlight). Imported by
+  `slowargo.js`; design in `reports/WIDGET_PRESET_NODE_DESIGN.md`
 - **`js/maskEditorTurbo.js`**: Mask editor integration module with Fast Forward Mode and clipspace reload features
 - **Node Categories**: All nodes are categorized under "Slowargo" in ComfyUI
 

@@ -3,6 +3,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
 import { initFastForwardMode, performMaskSave } from "./maskEditorTurbo.js";
+import { setupWidgetPreset } from "./widgetPreset.js";
 import { loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath, getWorkflowStore } from "./utils.js";
 
 loadCSS(import.meta.url, "./slowargo.css");
@@ -1470,6 +1471,8 @@ app.registerExtension({
 
                 return result;
             };
+        } else if (nodeType?.comfyClass === "WidgetPreset") {
+            setupWidgetPreset(nodeType, nodeData, app);
         }
 
         // console.log("[slowargo.js] init done", nodeType?.comfyClass)
