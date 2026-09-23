@@ -115,6 +115,22 @@ const comboAccepts = (widget, value) => {
     return Array.isArray(values) ? values.includes(value) : true;
 };
 
+// NumberWidget.setValue clamps to options.min/max, so an out-of-range value would be written as something else
+const numberInRange = (widget, value) => {
+    if (typeof value !== "number") return true;
+    const { min, max } = widget.options ?? {};
+    return !(min != null && value < min) && !(max != null && value > max);
+};
+
+// Why Apply would not write `value` as it is, or null when it would. Shared by Apply and the preset tooltip.
+const rejectReason = (widget, value) => {
+    if (!comboAccepts(widget, value)) return "is not an option";
+    if (!numberInRange(widget, value)) {
+        return `is out of range ${widget.options?.min ?? "-∞"}..${widget.options?.max ?? "∞"}`;
+    }
+    return null;
+};
+
 const formatValue = (value) => {
     const text = typeof value === "string" ? JSON.stringify(value) : String(value);
     return text.length > 32 ? `${text.slice(0, 31)}…` : text;
@@ -200,7 +216,7 @@ const describePreset = (item, targets) => {
         for (const [widgetName, value] of Object.entries(record?.widgets ?? {})) {
             // An unreachable node is already marked on its own line
             const { widget } = locateWidget(targets, nodeId, widgetName);
-            const valid = !nodeReachable || (widget && comboAccepts(widget, value));
+            const valid = !nodeReachable || (widget && !rejectReason(widget, value));
             lines.push(`  ${valid ? "" : "× "}${widgetName} = ${formatValue(value)}`);
         }
     }
@@ -271,6 +287,19 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                 const widgetName = node.inputs[index].widget?.name;
                 if (widgetName === filterWidget.name || widgetName === presetsWidget.name) node.removeInput(index);
             }
+        };
+
+        // For a workflow saved with those sockets, the load-time reconcile in litegraphService appends them after
+        // the target slot created in onNodeCreated, so the old order [filter, presets, target_0, …] becomes
+        // [target_0, filter, presets, …]. removeInput() only decrements slots behind the removed one, which leaves
+        // target_0's link.target_slot at its old index. A full graph load fixes that later (fixLinkInputSlots in
+        // app.ts), but node.configure() alone does not, so write the slots back here the same way.
+        const syncLinkTargetSlots = () => {
+            if (!node.graph) return;
+            node.inputs?.forEach((input, index) => {
+                const link = input.link != null ? getLink(node.graph, input.link) : null;
+                if (link && link.target_id === node.id) link.target_slot = index;
+            });
         };
         removeWidgetSockets();
 
@@ -680,9 +709,12 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                             skipped.push(`${record.title ?? "?"} #${nodeId}/${widgetName}: ${reason}`);
                             continue;
                         }
-                        if (!comboAccepts(widget, value)) {
+                        // Skipped rather than forced, like an unknown combo option: a clamped write would report
+                        // success while leaving a different value, and the preset could never highlight again
+                        const rejected = rejectReason(widget, value);
+                        if (rejected) {
                             const shown = formatValue(value);
-                            skipped.push(`${target.title} #${nodeId}/${widgetName}: ${shown} is not an option`);
+                            skipped.push(`${target.title} #${nodeId}/${widgetName}: ${shown} ${rejected}`);
                             continue;
                         }
                         if (typeof widget.setValue === "function") {
@@ -764,6 +796,7 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             try {
                 // Workflows saved before the sockets were removed bring them back as extra inputs
                 removeWidgetSockets();
+                syncLinkTargetSlots();
                 applyEditorVisibility();
                 rebuildPresetButtons(readPresets().data.items);
             } finally {

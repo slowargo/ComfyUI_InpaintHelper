@@ -246,7 +246,13 @@ Python 这边只是个空壳，功能全在前端。保留它是为了让节点�
 
 节点定义里的 `socketless` 选项本可以避免创建输入口（`litegraphService.ts:180`），但 1.37.2 的字符串 widget 创建时
 不会把它带进 `widget.options`，声明了也不生效。所以在 `onNodeCreated` 里直接移除这两个输入口；更早保存的 workflow
-读档时会把它们作为额外输入恢复回来，`onConfigure` 里再移除一次。`removeInput` 会同步修正后面连线的槽位序号。
+读档时会把它们作为额外输入恢复回来，`onConfigure` 里再移除一次。
+
+移除之后要自己把连线的槽位序号写回去。读档对账时，`onNodeCreated` 建的 `preset_target_0` 算作已定义的输入排在前面，
+旧存档里的 `filter`、`presets` 和其余动态槽作为额外输入排在后面，顺序从 `[filter, presets, target_0, …]`
+变成 `[target_0, filter, presets, …]`。`removeInput` 只修正被删位置之后的槽，`target_0` 已经排到前面，
+它的 `link.target_slot` 就停在旧值上。完整的读档流程最后会调用 `fixLinkInputSlots`（`app.ts:736`）把所有序号改对，
+但只调用 `node.configure` 的路径不会经过这一步，所以在 `onConfigure` 里按同样的方式回写一次。
 
 ### 动态输入槽
 
@@ -254,7 +260,8 @@ Python 这边只是个空壳，功能全在前端。保留它是为了让节点�
 
 - 末尾始终保留一个空的 `*` 输入槽，用来连新节点
 - 中间出现空槽就移除
-- 在 `onConnectionsChange` 和 `onConfigure` 之后执行，用微任务合并同一时刻的多次触发
+- 在 `onConnectionsChange` 和 `onConfigure` 之后延迟 50ms 执行（`setTimeout`），合并同一时刻的多次触发。
+  延迟还保证粘贴时连线已经重新接好，再去整理空槽
 
 连线序号本身没有任何含义，移除空槽导致序号变化也无所谓。
 
@@ -266,7 +273,8 @@ Python 这边只是个空壳，功能全在前端。保留它是为了让节点�
 
 ### 复制节点
 
-需要重写 `clone()`，参考 `base_any_input_connected_node.js:17-27`。
+不需要重写 `clone()`。1.37.2 默认的 `clone()` 会把所有输入的连线置空（`LGraphNode.ts:943-946`），
+之后的空槽整理会把它们收拢成一个空槽。
 
 单独复制预设节点时，litegraph 不会带上连线。副本保留全部预设数据，动态槽整理成一个空槽，
 状态行提示"没有连接节点"。保留数据是有用的：把副本重新连回原来那些节点，因为 id 没变，预设照样能用，
@@ -361,14 +369,17 @@ Save、改名、删除这三处修改 `presets` 的地方也一样用这对事�
 1. 对预设里的每个 node id，在"当前连着的节点"里找对应节点。找不到就跳过这个节点的全部参数，
    包括断线、节点被删除、复制后 id 对不上这几种情况
 2. 对该节点下的每个 widget 名，找 `name` 相同、并且满足 7.2 四个条件的 widget。找不到就跳过
-3. 下拉框的值不在当前可选项里（比如模型文件已经换了），跳过，不强行写入
+3. 下拉框的值不在当前可选项里（比如模型文件已经换了），或者数值超出了 widget 当前的 `min`/`max`，跳过，不强行写入。
+   数字 widget 的 `setValue` 会把超出范围的值截断（`NumberWidget.ts:38-46`），照写的话会报告成功、实际却是另一个值，
+   这条预设也就永远不会再高亮
 4. 通过 `widget.setValue` 写入：
    ```js
    widget.setValue(value, { e: undefined, node: targetNode, canvas: app.canvas });
    ```
    `setValue`（`BaseWidget.ts:313-333`）除了调用回调，还会同步 `options.property`（否则读档时会被旧的 property 值
    覆盖回去）、通知 `node.onWidgetChanged`、递增 `graph._version`。回调必须触发，本仓库的 `LoadRecentImagePlusV1`、
-   `FloatSelector` 都靠回调同步界面和内部状态。没有 `setValue` 的 widget 退回直接赋值再调回调
+   `FloatSelector` 都靠回调同步界面和内部状态。没有 `setValue` 的 widget 退回直接赋值再调回调。
+   `setValue` 在新值和当前值相等时直接返回（`BaseWidget.ts:318`），不会触发回调
 
 每个参数都要当场重新查找 widget，不能事先查好存起来。有些回调会重建整组 widget，
 比如 `FloatSelector` 改了 `slot_count` 会重建所有 `float_N`，事先存下的引用就失效了。
@@ -452,7 +463,8 @@ Vue 模式下按钮文字能不能跟着更新，取决于 `WidgetButton.vue` �
   （`× 路径 (unsupported)`），以及规则错误、无法解析的连线、上一次 Apply 跳过的内容；没命中的路径不列，
   完整列表看调试区
 - **预设按钮**：这条预设记录的内容，按节点分组列出 `widget = 值`。当前找不到的节点或参数（断线、节点被删除、
-  widget 不存在、下拉框没有这个选项），也就是 Apply 时会跳过的，前面标 `×`。不和当前值对比
+  widget 不存在、下拉框没有这个选项、数值超出范围），也就是 Apply 时会跳过的，前面标 `×`。判断和 Apply 用同一个函数。
+  不和当前值对比
 
 提示最多 30 行，超出的显示 `… N more`。原因是提示框鼠标一动就消失，不能滚动也不能复制，只限制了最大宽度
 （30vw），没有最大高度。
@@ -616,3 +628,5 @@ Vue 模式下按钮文字能不能跟着更新，取决于 `WidgetButton.vue` �
     `socketless` 在 1.37.2 的字符串 widget 上不生效，改为在前端移除
 22. **增加状态行和预设按钮的提示。** 调试区隐藏时也能看到信息：状态行显示精简调试信息，预设按钮显示预设内容，
     无效项标 `×`
+23. **根据第二轮代码评审修正。** 移除输入口后自己回写连线的槽位序号，并改正了原先"`removeInput` 会修正序号"的错误说明；
+    超出 `min`/`max` 的数值在 Apply 时跳过，提示里标 `×`；文档改正了 `clone()`、合并方式和 `setValue` 相等时不触发回调三处
