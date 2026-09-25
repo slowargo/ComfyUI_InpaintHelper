@@ -3,7 +3,8 @@
 低 denoise inpaint 的偏色来自去噪器自身：每一步的 x0 预测都会把重绘区往模型偏好的
 影调/白平衡上拉，逐步累加。出图后的色彩校正（见 nodes_color.py）只能事后平移均值，
 后续步骤生成的细节已经建立在偏掉的颜色上。本模块把校正挪进采样循环：每一步拿到 x0
-后先把遮罩内的低频拉回原图低频，再交给采样器走下一步，后续步骤就在正确的颜色上细化。
+后先把遮罩内的低频拉回原图低频（只按遮罩内像素求局部平均），再交给采样器走下一步，
+后续步骤就在正确的颜色上细化。
 
 实测（Krea2 Turbo，denoise 0.32）遮罩内偏色与遮罩外测得的模型偏差方向不同——它跟
 内容和提示词相关，不是全局常量，所以没法用遮罩外的实测值扣除，只能锚定低频。这等于
@@ -146,10 +147,12 @@ class InpaintX0DriftGuard:
                 msk = comfy.sampler_helpers.prepare_mask(mask, den.shape, den.device).float()[:, :1]
                 sigma_px = min(blur_sigma, min(den.shape[-2:]) / 4)
                 cache.clear()
-                cache[key] = (orig, msk, sigma_px, _blur(orig, sigma_px))
-            orig, msk, sigma_px, orig_low = cache[key]
+                cache[key] = (orig, msk, sigma_px, _blur(msk, sigma_px).clamp(min=1e-3))
+            orig, msk, sigma_px, msk_low = cache[key]
             x0 = den.float()
-            corr = strength * msk * (orig_low - _blur(x0, sigma_px)) if anchor else None
+            # 归一化卷积：只用遮罩内像素求局部平均偏差。直接模糊整张图时，细长或细小的遮罩会被周围
+            # 未重绘的像素稀释，修正量只剩一部分
+            corr = strength * msk * _blur(msk * (orig - x0), sigma_px) / msk_low if anchor else None
 
             if log:
                 resid = x0 - orig
