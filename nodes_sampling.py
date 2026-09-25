@@ -26,6 +26,8 @@ LOG_PREFIX = "[X0DriftGuard]"
 # 不低于 INSIDE_THRESHOLD 的视为重绘核心区
 KNOWN_THRESHOLD = 0.05
 INSIDE_THRESHOLD = 0.95
+# latent_rgb_factors 的输出约在 [-1,1]，乘它换算成 0..255 量程
+RGB_SCALE = 127.5
 
 
 def _gaussian_kernel1d(sigma: float, device, dtype) -> torch.Tensor:
@@ -88,10 +90,21 @@ class InpaintX0DriftGuard:
                     "Log per-step drift (approximate RGB of batch 0) to the console. Always on in "
                     "measure mode."
                 )}),
+                "tolerance": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 64.0, "step": 0.5,
+                    "tooltip": (
+                        "Local low-frequency drift left alone, in approximate RGB levels (0-255). "
+                        "Smaller drift is kept, larger drift is pulled back to this size. A "
+                        "trade-off, not a separation: higher keeps more prompt-driven sheen or "
+                        "lighting but also more color cast; around 4 keeps roughly half of each. "
+                        "0 anchors fully."
+                    ),
+                }),
             },
             "optional": {
                 "mask": ("MASK", {"tooltip": (
-                    "The inpaint mask. Defaults to the latent's noise mask (from SetLatentNoiseMask)."
+                    "The inpaint mask. Defaults to the latent's noise mask (from "
+                    "SetLatentNoiseMask)."
                 )}),
             },
         }
@@ -105,7 +118,7 @@ class InpaintX0DriftGuard:
         "otherwise run after it and can reintroduce the drift."
     )
 
-    def patch(self, model, latent, mode, strength, blur_sigma, log, mask=None):
+    def patch(self, model, latent, mode, strength, blur_sigma, log, tolerance, mask=None):
         if mask is None:
             mask = latent.get("noise_mask")
         if mask is None:
@@ -124,14 +137,17 @@ class InpaintX0DriftGuard:
             rgb_factors = torch.tensor(latent_format.latent_rgb_factors)
             if rgb_factors.shape[0] != orig_raw.shape[1]:
                 rgb_factors = None
+        if anchor and tolerance > 0 and rgb_factors is None:
+            raise ValueError(
+                "InpaintX0DriftGuard: tolerance needs latent_rgb_factors, which this model lacks; set it to 0."
+            )
         cache = {}
 
         def fmt(r_bc):
-            # 残差不带偏置项；latent_rgb_factors 输出约在 [-1,1]，乘 127.5 换算成 0..255 量程。
-            # 没有可用因子的模型退回逐通道均值的 L2 范数
+            # 残差不带偏置项；没有可用因子的模型退回逐通道均值的 L2 范数
             if rgb_factors is None:
                 return f"|c|={float(r_bc[0].norm()):.4f}"
-            rgb = r_bc @ rgb_factors.to(r_bc.device, r_bc.dtype) * 127.5
+            rgb = r_bc @ rgb_factors.to(r_bc.device, r_bc.dtype) * RGB_SCALE
             return "[" + ", ".join(f"{v:+.2f}" for v in rgb[0].tolist()) + "]"
 
         def post_cfg(args):
@@ -147,12 +163,20 @@ class InpaintX0DriftGuard:
                 msk = comfy.sampler_helpers.prepare_mask(mask, den.shape, den.device).float()[:, :1]
                 sigma_px = min(blur_sigma, min(den.shape[-2:]) / 4)
                 cache.clear()
-                cache[key] = (orig, msk, sigma_px, _blur(msk, sigma_px).clamp(min=1e-3))
-            orig, msk, sigma_px, msk_low = cache[key]
+                factors = None if rgb_factors is None else rgb_factors.to(den.device) * RGB_SCALE
+                cache[key] = (orig, msk, sigma_px, _blur(msk, sigma_px).clamp(min=1e-3), factors)
+            orig, msk, sigma_px, msk_low, factors = cache[key]
             x0 = den.float()
             # 归一化卷积：只用遮罩内像素求局部平均偏差。直接模糊整张图时，细长或细小的遮罩会被周围
             # 未重绘的像素稀释，修正量只剩一部分
-            corr = strength * msk * _blur(msk * (orig - x0), sigma_px) / msk_low if anchor else None
+            corr = None
+            if anchor:
+                drift = _blur(msk * (orig - x0), sigma_px) / msk_low
+                if tolerance > 0:
+                    # 软阈值收缩：局部偏差不超过 tolerance 的原样保留，超出的只拉回到 tolerance
+                    size = (drift.movedim(1, -1) @ factors).norm(dim=-1, keepdim=True).movedim(-1, 1)
+                    drift = drift * (1 - tolerance / size.clamp(min=1e-6)).clamp(min=0)
+                corr = strength * msk * drift
 
             if log:
                 resid = x0 - orig
