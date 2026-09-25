@@ -9,6 +9,7 @@ WEB_DIRECTORY。节点实现按职责分在下面这几个模块里：
     nodes_strings.py   字符串记忆，以及它的历史记录路由
     nodes_preset.py    Widget Preset 的节点声明（功能全在前端）
     nodes_util.py      浮点开关/选择器、触发器、历史清理、SSIM 比较
+    nodes_clip_cache.py  带磁盘缓存的 CLIPTextEncode
 
 注意：API 路由是在模块 import 时注册的副作用。下面每一行导入看起来「只用到
 了几个节点类」，但删掉任何一行都会让该模块的路由一起消失。
@@ -33,6 +34,7 @@ from .nodes_image_io import (
 )
 from .nodes_strings import RememberStrings
 from .nodes_preset import WidgetPreset
+from .nodes_clip_cache import SimpleCachedCLIPTextEncode
 
 
 ##############################################
@@ -74,6 +76,7 @@ NODE_CLASS_MAPPINGS = {
     "MaskedColorMatch": MaskedColorMatch,
     "InpaintRegionColorFix": InpaintRegionColorFix,
     "WidgetPreset": WidgetPreset,
+    "SimpleCachedCLIPTextEncode": SimpleCachedCLIPTextEncode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -94,4 +97,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskedColorMatch": "Masked Color Match (Inpaint Drift Fix)",
     "InpaintRegionColorFix": "Inpaint Region Color Fix",
     "WidgetPreset": "Widget Preset",
+    "SimpleCachedCLIPTextEncode": "CLIP Text Encode (Disk Cache)",
 }
