@@ -10,6 +10,7 @@ WEB_DIRECTORY。节点实现按职责分在下面这几个模块里：
     nodes_preset.py    Widget Preset 的节点声明（功能全在前端）
     nodes_util.py      浮点开关/选择器、触发器、历史清理、SSIM 比较
     nodes_clip_cache.py  带磁盘缓存的 CLIPTextEncode
+    nodes_sampling.py  采样循环内的 inpaint 偏色抑制（逐步修正 x0 预测）
 
 注意：API 路由是在模块 import 时注册的副作用。下面每一行导入看起来「只用到
 了几个节点类」，但删掉任何一行都会让该模块的路由一起消失。
@@ -35,6 +36,7 @@ from .nodes_image_io import (
 from .nodes_strings import RememberStrings
 from .nodes_preset import WidgetPreset
 from .nodes_clip_cache import SimpleCachedCLIPTextEncode
+from .nodes_sampling import InpaintX0DriftGuard
 
 
 ##############################################
@@ -77,6 +79,7 @@ NODE_CLASS_MAPPINGS = {
     "InpaintRegionColorFix": InpaintRegionColorFix,
     "WidgetPreset": WidgetPreset,
     "SimpleCachedCLIPTextEncode": SimpleCachedCLIPTextEncode,
+    "InpaintX0DriftGuard": InpaintX0DriftGuard,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -98,4 +101,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "InpaintRegionColorFix": "Inpaint Region Color Fix",
     "WidgetPreset": "Widget Preset",
     "SimpleCachedCLIPTextEncode": "CLIP Text Encode (Disk Cache)",
+    "InpaintX0DriftGuard": "Inpaint X0 Drift Guard",
 }

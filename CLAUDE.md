@@ -14,6 +14,9 @@ ComfyUI_InpaintHelper is a ComfyUI extension that provides utility nodes for enh
   `NODE_*_MAPPINGS` tables. Node implementations live in the `nodes_*.py` modules below.
 - **`nodes_color.py`**: Lab colour correction (`MaskedColorMatch`, `InpaintRegionColorFix`) plus the
   shared tensor helpers. Depends only on torch and kornia, so it can be tested without ComfyUI.
+- **`nodes_sampling.py`**: In-loop inpaint drift guard (`InpaintX0DriftGuard`): a
+  `sampler_post_cfg_function` that anchors the masked region's x0 low frequencies to the original
+  every step. Depends only on torch.
 - **`nodes_image_io.py`**: Image loading, recent-file enumeration, and the preview refresh routes
 - **`nodes_save.py`**: Image saving, server-side file transfer, and the transfer route
 - **`nodes_strings.py`**: String memory and its history routes
