@@ -1,7 +1,8 @@
 """CLIPTextEncode with a persistent disk cache.
 
-A cache hit skips the text encoder entirely, so the model never has to be loaded into VRAM just to
-re-encode a prompt seen before (e.g. after a restart, or when switching between prompts).
+A cache hit skips the encode itself, including swapping the text encoder into VRAM for it, when a
+prompt seen before comes back (e.g. after a restart, or when switching between prompts). The upstream
+CLIP loader still runs and reads the model file as usual.
 
 Layout: user/slowargo/clip_text_encode/<model file names>/<sha256>.pt
 Each model group is an independent LRU (by file mtime) capped at MAX_CACHE_ITEMS.
@@ -9,8 +10,11 @@ Each model group is an independent LRU (by file mtime) capped at MAX_CACHE_ITEMS
 The key covers everything carried on the CLIP object that changes the output: model file names,
 the loader's simple args (clip_type, ...), LoRA patches (sampled fingerprint), clip skip
 (layer_idx), tokenizer options and the prompt text. It is intentionally loose (no mtime/size,
-sampled LoRA tensors) -- replacing a model file in place under the same name needs a manual cleanup
-of its group directory.
+sampled LoRA tensors, file names without directories):
+- replacing a model (or embedding) file in place under the same name needs a manual cleanup of its
+  group directory;
+- two different models sharing a file name (e.g. a/model.safetensors and b/model.safetensors) share
+  cache entries and may return each other's conditioning. Accepted as a known risk.
 """
 
 import enum
@@ -35,8 +39,8 @@ SAMPLES_PER_TENSOR = 16
 # so the (relatively costly) tensor sampling runs once per LoRA stack per session.
 _patch_fp_memo: "OrderedDict[object, str]" = OrderedDict()
 _PATCH_FP_MEMO_SIZE = 64
-# group dir -> number of .pt files, so pruning does not list the directory on every write
-_group_counts: dict[str, int] = {}
+# Messages already warned about, so a CLIP that cannot be cached does not warn on every run
+_warned: set[str] = set()
 
 
 def _stable_repr(value):
@@ -45,23 +49,22 @@ def _stable_repr(value):
         return repr(value)
     if isinstance(value, enum.Enum):
         return str(value)
-    if isinstance(value, torch.dtype):
-        return str(value)
     if isinstance(value, (list, tuple)):
         parts = [_stable_repr(v) for v in value]
         return None if None in parts else "[" + ",".join(parts) + "]"
     return None
 
 
-def _iter_tensors(value):
-    """Yield the tensors inside a patch value (WeightAdapterBase, legacy tuples, or a bare tensor)."""
-    if isinstance(value, torch.Tensor):
+def _iter_patch_leaves(value):
+    """Yield tensors and scalars (LoRA alpha, patch type names) inside a patch value
+    (WeightAdapterBase, legacy tuples, or a bare tensor)."""
+    if isinstance(value, torch.Tensor) or value is None or isinstance(value, (str, int, float, bool)):
         yield value
     elif isinstance(value, (list, tuple)):
         for v in value:
-            yield from _iter_tensors(v)
+            yield from _iter_patch_leaves(v)
     elif hasattr(value, "weights"):
-        yield from _iter_tensors(value.weights)
+        yield from _iter_patch_leaves(value.weights)
 
 
 def _tensor_fingerprint(t):
@@ -70,7 +73,9 @@ def _tensor_fingerprint(t):
     header = f"{tuple(t.shape)}:{t.dtype}:"
     if n == 0:
         return header.encode("utf-8")
-    idx = torch.linspace(0, n - 1, steps=min(n, SAMPLES_PER_TENSOR), device=flat.device).long()
+    # Integer arithmetic: a float32 linspace rounds n - 1 up to n above 2**24 elements (out of range)
+    k = min(n, SAMPLES_PER_TENSOR)
+    idx = torch.arange(k, device=flat.device) * (n - 1) // max(k - 1, 1)
     sample = flat[idx].to("cpu", torch.float32)
     return header.encode("utf-8") + sample.numpy().tobytes()
 
@@ -88,8 +93,8 @@ def _patches_fingerprint(patcher):
             func_name = getattr(function, "__qualname__", repr(function)) if function is not None else ""
             hasher.update(f"|{strength_patch}|{strength_model}|{offset}|{func_name}|".encode("utf-8"))
             hasher.update(type(value).__name__.encode("utf-8"))
-            for t in _iter_tensors(value):
-                hasher.update(_tensor_fingerprint(t))
+            for leaf in _iter_patch_leaves(value):
+                hasher.update(_tensor_fingerprint(leaf) if isinstance(leaf, torch.Tensor) else repr(leaf).encode())
     fp = hasher.hexdigest()
 
     if uuid is not None:
@@ -141,30 +146,31 @@ def _cache_location(clip, text):
 
 def _prune_group(group_dir):
     """Drop the least recently used files once the group exceeds MAX_CACHE_ITEMS."""
-    count = _group_counts.get(group_dir)
-    if count is not None and count <= MAX_CACHE_ITEMS:
+    entries = [e for e in os.scandir(group_dir) if e.name.endswith(".pt")]
+    if len(entries) <= MAX_CACHE_ITEMS:
         return
-    try:
-        entries = [e for e in os.scandir(group_dir) if e.name.endswith(".pt")]
-    except FileNotFoundError:
-        _group_counts[group_dir] = 0
-        return
-    if len(entries) > MAX_CACHE_ITEMS:
-        entries.sort(key=lambda e: e.stat().st_mtime)
-        for e in entries[: len(entries) - MAX_CACHE_ITEMS]:
-            try:
-                os.remove(e.path)
-                logger.debug("SimpleCachedCLIPTextEncode: pruned %s", e.path)
-            except OSError:
-                logger.warning("SimpleCachedCLIPTextEncode: failed to prune %s", e.path, exc_info=True)
-    _group_counts[group_dir] = min(len(entries), MAX_CACHE_ITEMS)
+
+    def mtime(e):
+        try:
+            return e.stat().st_mtime
+        except OSError:  # removed since scandir
+            return 0.0
+
+    entries.sort(key=mtime)
+    for e in entries[: len(entries) - MAX_CACHE_ITEMS]:
+        try:
+            os.remove(e.path)
+            logger.debug("SimpleCachedCLIPTextEncode: pruned %s", e.path)
+        except OSError:
+            logger.warning("SimpleCachedCLIPTextEncode: failed to prune %s", e.path, exc_info=True)
 
 
 class SimpleCachedCLIPTextEncode(nodes.CLIPTextEncode):
     CATEGORY = "Slowargo"
     DESCRIPTION = (
-        "CLIP Text Encode with a disk cache (per model, 100 most recently used prompts). A cache hit "
-        "skips loading the text encoder. Bypassed when the CLIP carries hooks."
+        "CLIP Text Encode with a disk cache (per model file name, 100 most recently used prompts). A "
+        "cache hit skips the encode and swapping the text encoder into VRAM for it. Bypassed when the "
+        "CLIP carries hooks."
     )
 
     def encode(self, clip, text):
@@ -177,8 +183,12 @@ class SimpleCachedCLIPTextEncode(nodes.CLIPTextEncode):
 
         try:
             group_dir, key = _cache_location(clip, text)
-        except Exception:
-            logger.warning("SimpleCachedCLIPTextEncode: cannot identify CLIP, cache disabled", exc_info=True)
+        except Exception as e:
+            # Expected for CLIPs from third-party loaders; warn once per reason, without a traceback
+            msg = f"{type(e).__name__}: {e}"
+            if msg not in _warned:
+                _warned.add(msg)
+                logger.warning("SimpleCachedCLIPTextEncode: cannot identify CLIP, cache disabled (%s)", msg)
             return super().encode(clip, text)
         cache_path = os.path.join(group_dir, f"{key}.pt")
 
@@ -198,17 +208,22 @@ class SimpleCachedCLIPTextEncode(nodes.CLIPTextEncode):
         logger.info("SimpleCachedCLIPTextEncode: cache miss %s/%s", os.path.basename(group_dir), key[:12])
         conditioning = super().encode(clip, text)[0]
 
+        # Write-then-rename so an interrupted save never leaves a truncated cache file
+        tmp_path = f"{cache_path}.{os.getpid()}.tmp"
         try:
             os.makedirs(group_dir, exist_ok=True)
-            existed = os.path.exists(cache_path)
-            # Write-then-rename so an interrupted save never leaves a truncated cache file
-            tmp_path = cache_path + ".tmp"
             torch.save(conditioning, tmp_path)
             os.replace(tmp_path, cache_path)
-            if not existed and group_dir in _group_counts:
-                _group_counts[group_dir] += 1
-            _prune_group(group_dir)
         except Exception:
             logger.warning("SimpleCachedCLIPTextEncode: failed to write %s", cache_path, exc_info=True)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            return (conditioning,)
+        try:
+            _prune_group(group_dir)
+        except Exception:
+            logger.warning("SimpleCachedCLIPTextEncode: failed to prune %s", group_dir, exc_info=True)
 
         return (conditioning,)
