@@ -16,11 +16,15 @@ import logging
 import torch
 import torch.nn.functional as F
 
+import comfy.sampler_helpers
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[X0DriftGuard]"
-# 只用于 measure 日志：遮罩值不超过它的 latent 像素视为未重绘，拿来观察模型在该 sigma 下的偏差
+# 只用于日志：遮罩值不超过 KNOWN_THRESHOLD 的 latent 像素视为未重绘，拿来观察模型在该 sigma 下的偏差；
+# 不低于 INSIDE_THRESHOLD 的视为重绘核心区
 KNOWN_THRESHOLD = 0.05
+INSIDE_THRESHOLD = 0.95
 
 
 def _gaussian_kernel1d(sigma: float, device, dtype) -> torch.Tensor:
@@ -42,19 +46,6 @@ def _blur(x: torch.Tensor, sigma: float) -> torch.Tensor:
     return flat.reshape(shape)
 
 
-def _mask_like(mask: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
-    """把 MASK 缩放到 ref 的空间尺寸，并整形成可与 ref 广播的 [B,1,(1...),H,W]。"""
-    m = mask.float()
-    if m.ndim == 2:
-        m = m.unsqueeze(0)
-    h, w = ref.shape[-2], ref.shape[-1]
-    m = F.interpolate(m.unsqueeze(1).to(ref.device), size=(h, w), mode="area")
-    m = m.view(m.shape[0], 1, *([1] * (ref.ndim - 4)), h, w)
-    if m.shape[0] != ref.shape[0]:
-        m = m.expand(ref.shape[0], *m.shape[1:])
-    return m.clamp(0, 1)
-
-
 def _weighted_mean(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     """按空间权重求每个 (batch, channel) 的均值，返回 [B,C]。"""
     dims = tuple(range(2, x.ndim))
@@ -72,9 +63,6 @@ class InpaintX0DriftGuard:
                 "latent": ("LATENT", {"tooltip": (
                     "The VAE-encoded original (the same latent fed to the sampler)."
                 )}),
-                "mask": ("MASK", {"tooltip": (
-                    "The inpaint mask (the one given to SetLatentNoiseMask)."
-                )}),
                 "mode": (["lowfreq_anchor", "measure"], {
                     "default": "lowfreq_anchor",
                     "tooltip": (
@@ -83,19 +71,28 @@ class InpaintX0DriftGuard:
                         "the per-step drift."
                     ),
                 }),
-                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "strength": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "0 leaves sampling untouched, 1 fully anchors the low frequencies.",
+                }),
                 "blur_sigma": ("FLOAT", {
                     "default": 12.0, "min": 1.0, "max": 64.0, "step": 0.5,
                     "tooltip": (
                         "Gaussian sigma in latent pixels (x8 for image pixels). Colors above this "
                         "scale are anchored; smaller values hold color tighter but also constrain "
-                        "more detail."
+                        "more detail. Capped at a quarter of the latent's short side."
                     ),
                 }),
                 "log": ("BOOLEAN", {"default": False, "tooltip": (
-                    "Log per-step drift (approximate RGB) to the console."
+                    "Log per-step drift (approximate RGB of batch 0) to the console. Always on in "
+                    "measure mode."
                 )}),
-            }
+            },
+            "optional": {
+                "mask": ("MASK", {"tooltip": (
+                    "The inpaint mask. Defaults to the latent's noise mask (from SetLatentNoiseMask)."
+                )}),
+            },
         }
 
     RETURN_TYPES = ("MODEL",)
@@ -103,44 +100,67 @@ class InpaintX0DriftGuard:
     CATEGORY = "Slowargo"
     DESCRIPTION = (
         "Anchor the inpaint region's low frequencies to the original inside the sampling loop to "
-        "stop color drift at its source."
+        "stop color drift at its source. Place it after other post-CFG patches, which would "
+        "otherwise run after it and can reintroduce the drift."
     )
 
-    def patch(self, model, latent, mask, mode, strength, blur_sigma, log):
+    def patch(self, model, latent, mode, strength, blur_sigma, log, mask=None):
+        if mask is None:
+            mask = latent.get("noise_mask")
+        if mask is None:
+            raise ValueError("InpaintX0DriftGuard needs a mask: connect one or use a latent from SetLatentNoiseMask.")
+        orig_raw = latent["samples"]
+        # 采样器不对全零 latent 做 process_in（见 comfy.samplers），这里若照做会锚定到一个不存在的色调
+        if torch.count_nonzero(orig_raw) == 0:
+            raise ValueError("InpaintX0DriftGuard got an empty latent; connect the VAE-encoded original.")
+
         m = model.clone()
         latent_format = m.get_model_object("latent_format")
-        orig_raw = latent["samples"]
-        rgb_factors = latent_format.latent_rgb_factors
+        anchor = mode == "lowfreq_anchor" and strength > 0
+        log = log or mode == "measure"
+        rgb_factors = None
+        if latent_format.latent_rgb_factors is not None and latent_format.latent_rgb_factors_reshape is None:
+            rgb_factors = torch.tensor(latent_format.latent_rgb_factors)
+            if rgb_factors.shape[0] != orig_raw.shape[1]:
+                rgb_factors = None
         cache = {}
 
-        def to_rgb(r_bc):
-            # 残差不带偏置项；latent_rgb_factors 输出约在 [-1,1]，乘 127.5 换算成 0..255 量程
-            f = torch.tensor(rgb_factors, device=r_bc.device, dtype=r_bc.dtype)
-            return "[" + ", ".join(f"{v:+.2f}" for v in (r_bc @ f * 127.5)[0].tolist()) + "]"
+        def fmt(r_bc):
+            # 残差不带偏置项；latent_rgb_factors 输出约在 [-1,1]，乘 127.5 换算成 0..255 量程。
+            # 没有可用因子的模型退回逐通道均值的 L2 范数
+            if rgb_factors is None:
+                return f"|c|={float(r_bc[0].norm()):.4f}"
+            rgb = r_bc @ rgb_factors.to(r_bc.device, r_bc.dtype) * 127.5
+            return "[" + ", ".join(f"{v:+.2f}" for v in rgb[0].tolist()) + "]"
 
         def post_cfg(args):
             den = args["denoised"]
             key = (den.shape, den.device)
             if key not in cache:
-                orig = latent_format.process_in(orig_raw.to(den.device, torch.float32)).reshape(den.shape)
+                if orig_raw.shape != den.shape:
+                    raise ValueError(
+                        f"InpaintX0DriftGuard: connected latent is {tuple(orig_raw.shape)} but the sampler runs "
+                        f"{tuple(den.shape)}; use this patched model only with the sampler that takes that latent."
+                    )
+                orig = latent_format.process_in(orig_raw.to(den.device, torch.float32))
+                msk = comfy.sampler_helpers.prepare_mask(mask, den.shape, den.device).float()[:, :1]
+                sigma_px = min(blur_sigma, min(den.shape[-2:]) / 4)
                 cache.clear()
-                cache[key] = (orig, _mask_like(mask, den), _blur(orig, blur_sigma))
-            orig, msk, orig_low = cache[key]
-            sigma = float(args["sigma"].flatten()[0])
+                cache[key] = (orig, msk, sigma_px, _blur(orig, sigma_px))
+            orig, msk, sigma_px, orig_low = cache[key]
             x0 = den.float()
-
-            anchor = mode == "lowfreq_anchor"
-            corr = strength * msk * (orig_low - _blur(x0, blur_sigma)) if anchor else None
+            corr = strength * msk * (orig_low - _blur(x0, sigma_px)) if anchor else None
 
             if log:
                 resid = x0 - orig
-                inside = (msk >= 0.95).float()
+                inside = (msk >= INSIDE_THRESHOLD).float()
                 known = (msk <= KNOWN_THRESHOLD).float()
-                corr_rgb = to_rgb(_weighted_mean(corr, inside)) if anchor else "off"
-                logger.info(f"{LOG_PREFIX} sigma={sigma:.4f} known_resid_rgb={to_rgb(_weighted_mean(resid, known))} "
-                            f"inside_resid_rgb={to_rgb(_weighted_mean(resid, inside))} inside_corr_rgb={corr_rgb}")
+                corr_msg = fmt(_weighted_mean(corr, inside)) if anchor else "off"
+                logger.info(f"{LOG_PREFIX} sigma={float(args['sigma'].flatten()[0]):.4f} "
+                            f"known_resid={fmt(_weighted_mean(resid, known))} "
+                            f"inside_resid={fmt(_weighted_mean(resid, inside))} inside_corr={corr_msg}")
 
-            if corr is None:
+            if not anchor:
                 return den
             return (x0 + corr).to(den.dtype)
 
