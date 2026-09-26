@@ -1,6 +1,6 @@
-"""字符串记忆节点，以及前端读写它历史记录的三条 API 路由。
+"""字符串记忆节点，前端读写它历史记录的三条 API 路由，以及入队时记录字符串的 on_prompt 钩子。
 
-路由是 import 时注册的副作用，所以 __init__.py 里对本模块的导入不能因为
+路由和钩子都是 import 时注册的副作用，所以 __init__.py 里对本模块的导入不能因为
 「看起来没用到 XXX_api」而删掉。
 """
 
@@ -46,15 +46,16 @@ class RememberStrings:
     CATEGORY = "Slowargo"
 
     def remember_strings(self, string, store_file, max_entries=10):
-        # trim string, trim store_file，解析store_file格式确定文件路径，文件如果存在，读入已记忆的string列表。
-        # 判断是否已记忆过该string，如果已记忆则将其移动到列表的顶部，否则添加到列表顶部。记录条数不超过 max_entries
-        # 之后保存回文件（确保string内容不会破坏json格式）。
-        
-        # Trim the inputs
         string = string.strip()
 
         if not string: return ("",)
 
+        RememberStrings.remember(string, store_file, max_entries)
+        return (string,)
+
+    @staticmethod
+    def remember(string, store_file, max_entries):
+        # 读入已记忆列表，已记忆则移到顶部，否则添加到顶部，记录条数不超过 max_entries，之后保存回文件。
         file_path, stored_entries = RememberStrings.read_stored_strings(store_file)
 
         # 1. 查找当前字符串是否已存在
@@ -100,9 +101,6 @@ class RememberStrings:
         except IOError as e:
             logger.error(f"[RememberStrings] Save error: {e}")
 
-        # PromptServer.instance.send_sync("slowargo.js.extension.RememberStrings", {"entries": final_entries})
-        return (string,)
-
     @staticmethod
     def read_stored_strings(store_file):
         store_file = store_file.strip()
@@ -140,6 +138,27 @@ class RememberStrings:
 
         # logger.info(f"[RememberStrings] file_path:{file_path}")
         return file_path, stored_entries
+
+
+# 入队时就记录：默认的 RAM 缓存会保留多次运行的结果，从历史里选回一个旧字符串时节点命中缓存、
+# remember_strings 根本不执行，顺序也就不会更新。用 IS_CHANGED 强制重跑又会连带下游（CLIP 编码等）
+# 失效，所以改在这里处理。只处理三个输入都是字面值的节点；string 来自连线的情况仍靠节点执行时记录。
+# 这一步在校验之前，所以校验失败的 prompt、以及没接到任何输出的 RememberStrings 节点也会被记录。
+def remember_strings_on_prompt(json_data):
+    for node in json_data.get("prompt", {}).values():
+        if node.get("class_type") != "RememberStrings":
+            continue
+        inputs = node.get("inputs", {})
+        string, store_file = inputs.get("string"), inputs.get("store_file")
+        max_entries = inputs.get("max_entries", 10)
+        if isinstance(string, str) and isinstance(store_file, str) and isinstance(max_entries, int):
+            string = string.strip()
+            if string:
+                RememberStrings.remember(string, store_file, max_entries)
+    return json_data
+
+
+PromptServer.instance.add_on_prompt_handler(remember_strings_on_prompt)
 
 
 # 获取历史记录接口
