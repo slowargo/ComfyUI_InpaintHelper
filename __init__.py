@@ -100,6 +100,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MaskedColorMatch": "Masked Color Match (Inpaint Drift Fix)",
     "InpaintRegionColorFix": "Inpaint Region Color Fix",
     "WidgetPreset": "Widget Preset",
-    "SimpleCachedCLIPTextEncode": "CLIP Text Encode (Disk Cache)",
+    "SimpleCachedCLIPTextEncode": "Simple Cached CLIP Text Encode",
     "InpaintX0DriftGuard": "Inpaint X0 Drift Guard",
 }
