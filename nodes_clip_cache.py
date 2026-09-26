@@ -31,7 +31,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 CACHE_ROOT = os.path.join(folder_paths.get_user_directory(), "slowargo", "clip_text_encode")
-MAX_CACHE_ITEMS = 100
+MAX_CACHE_ITEMS = 200
 # Elements sampled per LoRA tensor; enough to tell different LoRAs apart, not a strict hash
 SAMPLES_PER_TENSOR = 16
 
