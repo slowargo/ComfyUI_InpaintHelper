@@ -75,7 +75,7 @@ function createClipspaceLayerRef(filename, subfolder) {
 }
 
 // The editor saves clipspace layers to input/clipspace/ up to v1.37.2 and to the input root
-// since v1.47.3 (#12318), so look in both. Names come back newest first, e.g.
+// since v1.47.3 (#12318). The backend's "clipspace [N][input]" covers both, newest first, e.g.
 // "clipspace/clipspace-painted-masked-123.png [input]" or "clipspace-painted-masked-123.png [input]".
 const CLIPSPACE_NAME_RE = /^(?:(clipspace)\/)?clipspace-painted-masked-(\d+)\.png/;
 
@@ -84,7 +84,7 @@ async function getLatestClipspaceFilename() {
         const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({watch_folders: 'clipspace [4][input]; [64][input]'})
+            body: JSON.stringify({watch_folders: 'clipspace [4][input]'})
         });
         const data = await response.json();
         return data.image_name?.find(name => CLIPSPACE_NAME_RE.test(name)) || null;
