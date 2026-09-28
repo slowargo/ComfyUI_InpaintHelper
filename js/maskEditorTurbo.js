@@ -1,7 +1,10 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { loadCSS, sleep, getMaskEditorStore, getMaskEditorDataStore, getToastStore, eventMatchesCommand, getKeybindingForEvent, isMaskNonEmpty } from "./utils.js";
+import {
+    loadCSS, sleep, getMaskEditorStore, getMaskEditorDataStore, getDialogStore, getToastStore, eventMatchesCommand,
+    getKeybindingForEvent, isMaskNonEmpty,
+} from "./utils.js";
 import {
     initBrushToolOverlay,
     updateCloneStyle,
@@ -46,6 +49,7 @@ const editorState = {
 
     // Editor Blur
     isBlurred: false,       // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
+    savedDismissProps: null, // Reka 下 blur 期间保存的 dialog dismiss 选项，退出 blur 时恢复
 
     /**
      * Previous base-layer visibility captured at Alt-hold start in eraser mode.
@@ -263,10 +267,42 @@ function getEditorOverlay() {
     return dialog.closest('.p-dialog-mask') || dialog.previousElementSibling;
 }
 
+// A Reka dialog (v1.53.6) dismisses itself on a pointer-down outside it, so in blur mode clicking a main-UI
+// input or a ComfyDialog popup (View History) closes the editor. Turn that off while blurred. PrimeVue
+// (v1.37.2) binds these props straight onto its Dialog and has no such dismissal, so leave it alone.
+// savedDismissProps is non-null exactly while this override is active (Reka + blurred).
+function setEditorOutsideDismiss(enabled) {
+    const props = getDialogStore()?.dialogStack.find(d => d.key === 'global-mask-editor')?.dialogComponentProps;
+    if (props?.renderer !== 'reka') return;
+    if (enabled) {
+        props.dismissableMask = editorState.savedDismissProps?.dismissableMask;
+        editorState.savedDismissProps = null;
+    } else {
+        editorState.savedDismissProps = { dismissableMask: props.dismissableMask };
+        props.dismissableMask = false;
+    }
+}
+
+// The Reka modal's FocusScope (a document-level focusin/focusout listener) pulls focus back into the dialog
+// whenever it leaves, so in blur mode nothing in the main UI can be typed into. Stop focus events that leave
+// the editor at <html>, before they bubble to document; element-level listeners still get them and focus
+// itself moves normally. Known limits: Reka layers opened from the main UI while blurred (Select, Settings)
+// lose their own focus handling too, and FocusScope can still refocus the editor if its last focused
+// element is removed.
+function onBlurredFocusEvent(e) {
+    if (!editorState.savedDismissProps) return;
+    const dialog = document.querySelector(".mask-editor-dialog");
+    const outside = e.type === 'focusin' ? e.target : e.relatedTarget;
+    if (dialog && outside instanceof Node && !dialog.contains(outside)) {
+        e.stopPropagation();
+    }
+}
+
 function toggleEditorBlur() {
     editorState.isBlurred = !editorState.isBlurred;
     const editor = document.querySelector(".mask-editor-dialog");
     const mask = getEditorOverlay();
+    setEditorOutsideDismiss(!editorState.isBlurred);
 
     if (editor) {
         if (editorState.isBlurred) {
@@ -279,6 +315,12 @@ function toggleEditorBlur() {
             // Show mask overlay
             if (mask) mask.classList.remove("editor-blurred-mask");
             document.body.classList.remove('mask-editor-blur-active');
+            // Focus may still sit in a main-UI input typed into while blurred; editor keys (Enter) must not go there.
+            // blur() first: the PrimeVue editor root (v1.37.2) is not focusable, so focus() alone would be a no-op.
+            if (!editor.contains(document.activeElement)) {
+                document.activeElement?.blur();
+                editor.focus();
+            }
 
             // Restore selected node when returning from blur
             if (editorState.sourceNodeId) {
@@ -466,6 +508,7 @@ function restoreColorAndAddToggle() {
 
     // Reset blur state on editor open
     editorState.isBlurred = false;
+    editorState.savedDismissProps = null;
 
     return true;
 }
@@ -911,6 +954,8 @@ export function initFastForwardMode() {
         // Bind keyboard events for editor
         window.addEventListener('keydown', onMaskEditorKeydown, true);
         window.addEventListener('keyup', onMaskEditorKeyup, true);
+        document.documentElement.addEventListener('focusin', onBlurredFocusEvent);
+        document.documentElement.addEventListener('focusout', onBlurredFocusEvent);
 
         // Add click listener to toggle blur state when clicking on blurred editor
         if (!dialog.dataset.blurListenerAdded) {
@@ -972,6 +1017,8 @@ export function initFastForwardMode() {
         // Remove keyboard event listeners
         window.removeEventListener('keydown', onMaskEditorKeydown, true);
         window.removeEventListener('keyup', onMaskEditorKeyup, true);
+        document.documentElement.removeEventListener('focusin', onBlurredFocusEvent);
+        document.documentElement.removeEventListener('focusout', onBlurredFocusEvent);
 
         // Remove click listener from dialog
         if (currentDialog && dialogClickHandler) {

@@ -160,6 +160,18 @@ export function getWorkflowStore() {
     }
 }
 
+export function getDialogStore() {
+    try {
+        const vueApp = document.querySelector('#vue-app')?.__vue_app__;
+        if (!vueApp) return null;
+        const pinia = vueApp.config.globalProperties?.$pinia;
+        if (!pinia?._s) return null;
+        return pinia._s.get('dialog') || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 export function getToastStore() {
     try {
         const vueApp = document.querySelector('#vue-app')?.__vue_app__;
