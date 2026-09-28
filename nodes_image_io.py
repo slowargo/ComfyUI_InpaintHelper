@@ -137,14 +137,15 @@ def _list_recent_in_dir(
     valid_exts: set,
     use_cache: bool = True,
     name_prefix: str = "",
+    exclude_prefix: str = "",
 ) -> List[Tuple[float, str]]:
     """扫描单个目录，返回按 mtime 降序的前 max_count 项 (mtime, 显示名称)。
-    name_prefix 非空时只保留以它开头的文件。
+    name_prefix 非空时只保留以它开头的文件；exclude_prefix 非空时跳过以它开头的文件。
 
     use_cache=False 只跳过“读”缓存，扫完照样把新结果写回去——否则手动刷新
     只能修好这一次的 HTTP 响应，下一次 INPUT_TYPES 又会读到那条没被覆盖的旧记录。
     """
-    cache_key = (str(full_dir), sub_folder, label, max_count, name_prefix)
+    cache_key = (str(full_dir), sub_folder, label, max_count, name_prefix, exclude_prefix)
     # os.stat 必须严格早于下面的 os.scandir：并发下最坏只会把偏旧的 mtime 和
     # 偏新的内容存在一起，导致多扫一次，而不会把陈旧结果当成新的发出去。
     try:
@@ -165,6 +166,8 @@ def _list_recent_in_dir(
         for entry in it:
             name = entry.name
             if name.startswith('.') or not name.startswith(name_prefix):
+                continue
+            if exclude_prefix and name.startswith(exclude_prefix):
                 continue
             dot = name.rfind('.')
             if dot < 0 or name[dot:].lower() not in valid_exts:
@@ -225,7 +228,8 @@ def get_recent_image_files(
         full_dir = root_dir / sub_folder if sub_folder else root_dir
 
         # 前端 mask editor 在 v1.37.2 把 clipspace 图层存到 input/clipspace/，v1.47.3 起改存 input 根目录。
-        # 所以 "clipspace [N][input]" 同时取根目录的 clipspace-painted-masked-*，合并后按 mtime 取前 N 个。
+        # 所以 "clipspace [N][input]" 同时取根目录的 clipspace-painted-masked-*，合并后按 mtime 取前 N 个；
+        # "[N][input]" 则排除根目录的 clipspace-*，和 v1.37.2 时一样只列用户自己的文件。
         if sub_folder == "clipspace" and label == "input":
             items = _list_recent_in_dir(
                 root_dir, "", label, max_count, valid_exts, use_cache, name_prefix="clipspace-painted-masked-"
@@ -239,15 +243,17 @@ def get_recent_image_files(
             logger.warning(f"Invalid dir: {full_dir}")
             continue
 
+        exclude_prefix = "clipspace-" if not sub_folder and label == "input" else ""
         file_items.extend(
-            _list_recent_in_dir(full_dir, sub_folder, label, max_count, valid_exts, use_cache)
+            _list_recent_in_dir(
+                full_dir, sub_folder, label, max_count, valid_exts, use_cache, exclude_prefix=exclude_prefix
+            )
         )
 
     # 全局按修改时间重新排序（复用上面已取到的 mtime）
     file_items.sort(key=lambda x: x[0], reverse=True)
 
-    # 根目录的 clipspace 文件可能同时被 "[N][input]" 和 "clipspace [N][input]" 选中，去重保留首个
-    return list(dict.fromkeys(display_name for _, display_name in file_items))
+    return [display_name for _, display_name in file_items]
 
 
 class LoadImageFromOutputsPlus(io.ComfyNode):
