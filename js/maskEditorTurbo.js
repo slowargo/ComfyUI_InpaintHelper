@@ -1,7 +1,7 @@
 import { ComfyApp } from "../../scripts/app.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { loadCSS, sleep, getMaskEditorStore, getMaskEditorDataStore, getToastStore, eventMatchesCommand, isMaskNonEmpty } from "./utils.js";
+import { loadCSS, sleep, getMaskEditorStore, getMaskEditorDataStore, getToastStore, eventMatchesCommand, getKeybindingForEvent, isMaskNonEmpty } from "./utils.js";
 import {
     initBrushToolOverlay,
     updateCloneStyle,
@@ -23,18 +23,19 @@ loadCSS(import.meta.url, "./maskEditorTurbo.css");
 
 // === Dual frontend support ===
 // Works with BOTH the new Reka-based mask editor (frontend ~v1.4x+) and the old
-// PrimeVue editor (<= v1.37.2). The variant is detected once when the editor
-// opens (`editorState.isReka = !dialog.closest('.p-dialog-mask')`, set in the
-// MutationObserver open branch). Version-specific touch points:
+// PrimeVue editor (<= v1.37.2), tested up to frontend v1.53.6. Version-specific
+// touch points:
 //   - getEditorOverlay(): old overlay is the dialog's `.p-dialog-mask` ancestor;
 //     new overlay is `dialog.previousElementSibling`.
 //   - toggleEditorBlur(): only the new Reka modal locks body{pointer-events:none};
 //     a body `.mask-editor-blur-active` class (with !important) frees the main UI
 //     on new and is a harmless no-op on old.
 //   - canvas guard: new editor has 4 canvases (img/rgb/mask/gpu), old has 3.
-//   - onEditorClose(): new frontend frees canvases on teardown; old has none, so
-//     the manual canvas cleanup runs only when !editorState.isReka.
+//   - onEditorClose(): neither version frees canvases on teardown, so the manual
+//     canvas cleanup always runs.
 //   - maximize button: old uses .p-dialog-maximize-button, new the lucide icon.
+//   - keybindings: v1.50.2+ skips all keybindings while a modal is open, so
+//     runKeybinding() dispatches them from the editor's capture-phase handler.
 
 // === Editor State ===
 const editorState = {
@@ -46,9 +47,6 @@ const editorState = {
     // Editor Blur
     isBlurred: false,       // 编辑器是否模糊化（默认清晰，可按 Esc 切到模糊态）
 
-    // Frontend variant, detected once when the editor opens (see MutationObserver).
-    // true = new Reka dialog; false = old PrimeVue dialog. Drives version-specific cleanup.
-    isReka: true,
     /**
      * Previous base-layer visibility captured at Alt-hold start in eraser mode.
      * `null` means Alt-hold override is inactive.
@@ -68,23 +66,28 @@ const colorMemory = {
     }
 };
 
-function createClipspaceLayerRef(filename) {
+function createClipspaceLayerRef(filename, subfolder) {
     return {
         filename,
-        subfolder: "clipspace",
+        subfolder,
         type: "input",
     };
 }
+
+// The editor saves clipspace layers to input/clipspace/ up to v1.37.2 and to the input root
+// since v1.47.3 (#12318), so look in both. Names come back newest first, e.g.
+// "clipspace/clipspace-painted-masked-123.png [input]" or "clipspace-painted-masked-123.png [input]".
+const CLIPSPACE_NAME_RE = /^(?:(clipspace)\/)?clipspace-painted-masked-(\d+)\.png/;
 
 async function getLatestClipspaceFilename() {
     try {
         const response = await api.fetchApi('/slowargo_api/refresh_previews_recent', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({watch_folders: 'clipspace [1][input]'})
+            body: JSON.stringify({watch_folders: 'clipspace [4][input]; [64][input]'})
         });
         const data = await response.json();
-        return data.image_name?.[0] || null;
+        return data.image_name?.find(name => CLIPSPACE_NAME_RE.test(name)) || null;
     } catch (error) {
         console.error("[slowargo.js] Failed to get latest clipspace filename:", error);
         return null;
@@ -94,6 +97,7 @@ async function getLatestClipspaceFilename() {
 function syncReloadedClipspaceState({
     reloadMaskOnly,
     timestamp,
+    subfolder,
     baseImg,
     baseUrl,
     maskImg,
@@ -119,7 +123,7 @@ function syncReloadedClipspaceState({
             image: baseImg,
             url: baseUrl,
         };
-        inputData.sourceRef = createClipspaceLayerRef(`clipspace-mask-${timestamp}.png`);
+        inputData.sourceRef = createClipspaceLayerRef(`clipspace-mask-${timestamp}.png`, subfolder);
         if (maskEditorStore) {
             maskEditorStore.image = baseImg;
         }
@@ -145,7 +149,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
             return;
         }
 
-        const timestamp = clipspaceFilename.match(/clipspace-painted-masked-(\d+)\.png/)?.[1];
+        const [, subfolder = "", timestamp] = clipspaceFilename.match(CLIPSPACE_NAME_RE) || [];
         if (!timestamp) {
             console.warn("[slowargo.js] Invalid clipspace filename");
             return;
@@ -174,9 +178,10 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
             img.src = url;
         });
 
-        const maskUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=a${params}`);
-        const baseUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&subfolder=clipspace&type=input&channel=rgb${params}`);
-        const paintUrl = api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&subfolder=clipspace&type=input${params}`);
+        const query = `subfolder=${subfolder}&type=input`;
+        const maskUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&${query}&channel=a${params}`);
+        const baseUrl = api.apiURL(`/view?filename=clipspace-mask-${timestamp}.png&${query}&channel=rgb${params}`);
+        const paintUrl = api.apiURL(`/view?filename=clipspace-paint-${timestamp}.png&${query}${params}`);
 
         // Load mask layer
         const maskImg = await loadImg(maskUrl);
@@ -201,7 +206,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
             const baseCtx = canvases[0].getContext('2d', {willReadFrequently: true});
             baseCtx.clearRect(0, 0, canvases[0].width, canvases[0].height);
             baseCtx.drawImage(baseImg, 0, 0, canvases[0].width, canvases[0].height);
-            baseImg.src = '';
+            // Keep baseImg.src: it becomes store.image, whose width/height drive the size label and pan/zoom
 
             // Load paint layer (optional)
             try {
@@ -219,6 +224,7 @@ async function loadClipspaceToEditor(reloadMaskOnly = false) {
         syncReloadedClipspaceState({
             reloadMaskOnly,
             timestamp,
+            subfolder,
             baseImg,
             baseUrl,
             maskImg,
@@ -453,7 +459,7 @@ function restoreColorAndAddToggle() {
     // === 最大化 mask editor dialog ===
     // Old PrimeVue: .p-dialog-maximize-button; new Reka: DialogMaximize lucide icon.
     const maximizeBtn = document.querySelector('.mask-editor-dialog button.p-dialog-maximize-button')
-        || document.querySelector('.icon-\\[lucide--maximize-2\\]')?.closest('button');
+        || document.querySelector('.mask-editor-dialog .icon-\\[lucide--maximize-2\\]')?.closest('button');
     if (maximizeBtn) {
         maximizeBtn.click();
     }
@@ -695,6 +701,48 @@ function onMaskEditorKeyup(e) {
     handleBrushToolKeyup(e);
 }
 
+const TEXT_INPUT_CTRL_KEYS = new Set(['A', 'C', 'V', 'X', 'Z', 'Y', 'P', 'BACKSPACE', 'DELETE',
+    'HOME', 'END', 'ARROWLEFT', 'ARROWRIGHT']);
+
+// Frontend >= v1.50.2 skips every keybinding while a modal (the mask editor) is open.
+// Older frontends (v1.37.2) still run them, so leave those alone.
+function coreBlocksModalKeybindings() {
+    const [major, minor, patch] = (window.__COMFYUI_FRONTEND_VERSION__ || '0.0.0').split('.').map(Number);
+    return major > 1 || (major === 1 && (minor > 50 || (minor === 50 && patch >= 2)));
+}
+
+// Commands meant to run while the editor is open. The core's own brush size keys ([ / ]) are blocked
+// by the modal check too. Comfy.MaskEditor.OpenMaskEditor is left to switchMode() (blur toggle).
+const EDITOR_COMMAND_PREFIXES = ['slowargo.js.extension.maskeditor.', 'Comfy.MaskEditor.BrushSize.'];
+
+// Run the command bound to this key while the editor is open.
+// allCommands=false limits this to EDITOR_COMMAND_PREFIXES.
+function runKeybinding(e, allCommands) {
+    if (!coreBlocksModalKeybindings()) return false;
+    const keybinding = getKeybindingForEvent(e);
+    if (!keybinding) return false;
+    if (!allCommands && !EDITOR_COMMAND_PREFIXES.some(p => keybinding.commandId.startsWith(p))) return false;
+
+    const target = e.composedPath()[0];
+    const targetElementId = keybinding.targetElementId === 'graph-canvas'
+        ? 'graph-canvas-container'
+        : keybinding.targetElementId;
+    if (targetElementId && !document.getElementById(targetElementId)?.contains(target)) return false;
+
+    // Same idea as KeyComboImpl.isReservedByTextInput: leave editing keys to text fields
+    const inTextInput = target?.tagName === 'TEXTAREA' || target?.tagName === 'INPUT' || target?.isContentEditable
+        || (target?.tagName === 'SPAN' && target.classList.contains('property_value'));
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (inTextInput && ((!ctrl && !e.altKey) || (ctrl && !e.altKey && TEXT_INPUT_CTRL_KEYS.has(e.key.toUpperCase())))) {
+        return false;
+    }
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    app.extensionManager.command.execute(keybinding.commandId);
+    return true;
+}
+
 async function onMaskEditorKeydown(e) {
     if (!ComfyApp.maskeditor_is_opended()) return;
 
@@ -723,6 +771,8 @@ async function onMaskEditorKeydown(e) {
         }
         return false;
     }
+
+    if (runKeybinding(e, false)) return;
 
     let targetNode = getFastForwardTargetNode();
 
@@ -761,6 +811,7 @@ async function onMaskEditorKeydown(e) {
         }
 
         // Otherwise, let all keyboard events pass through to main UI
+        runKeybinding(e, true);
     } else {
         if (e.altKey) {
             beginEraserAltHoldOverride();
@@ -938,17 +989,17 @@ export function initFastForwardMode() {
         cleanupFastForwardUI(currentDialog);
         document.body.classList.remove('mask-editor-blur-active');
 
-        // New Reka frontend frees canvases on teardown (fix/maskeditor-canvas-memory-leak).
-        // Old PrimeVue has no such teardown, so clear the backing store manually to avoid a
-        // VRAM leak — width/height=0 only, never removeChild (that would break the DOM).
-        if (!editorState.isReka) {
+        // Upstream (v1.37.2 and v1.53.6) keeps the canvases alive through the store after teardown,
+        // so clear the backing store manually to avoid a VRAM leak. Harmless when already freed.
+        // width/height=0 only, never removeChild (that would break the DOM).
+        currentDialog?.querySelectorAll('canvas').forEach(c => {
             try {
-                currentDialog?.querySelectorAll('canvas').forEach(c => {
-                    c.width = 0;
-                    c.height = 0;
-                });
+                // The Reka GPU preview canvas holds a configured WebGPU context; 2d canvases return null here
+                c.getContext('webgpu')?.unconfigure();
+                c.width = 0;
+                c.height = 0;
             } catch (_) { /* ignore unmounted canvases */ }
-        }
+        });
         currentDialog = null;
     }
 
@@ -963,9 +1014,7 @@ export function initFastForwardMode() {
         }
 
         if (dialog && !initialized) {
-            // Editor opened — detect frontend variant once (dialog + its overlay are
-            // mounted together), then start phase 2 to wait for side panel.
-            editorState.isReka = !dialog.closest('.p-dialog-mask');
+            // Editor opened — start phase 2 to wait for side panel.
             waitForSidePanel(dialog);
         }
     });

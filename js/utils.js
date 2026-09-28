@@ -190,6 +190,17 @@ export function eventMatchesCommand(event, commandId) {
     return false;
 }
 
+/**
+ * Look up the keybinding the core would run for this event.
+ * The key mirrors KeyComboImpl.serialize() (identical in frontend v1.37.2 and v1.53.6).
+ */
+export function getKeybindingForEvent(event) {
+    const store = getKeybindingStore();
+    if (!store) return null;
+    const serialized = `${event.key.toUpperCase()}:${event.ctrlKey || event.metaKey}:${event.altKey}:${event.shiftKey}`;
+    return store.getKeybinding({ serialize: () => serialized }) || null;
+}
+
 // === Canvas Coordinate Utilities ===
 
 /**
@@ -297,28 +308,17 @@ export function isMaskNonEmpty() {
 // === Brush Opacity Utilities ===
 
 /**
- * Get the current brush opacity, preferring Pinia store over DOM.
+ * Get the current brush opacity from the Pinia store.
+ * No DOM fallback: since v1.42.2 the size and hardness sliders are 0..1 too, so the opacity slider
+ * cannot be told apart by its attributes. Both supported frontends (v1.37.2, v1.53.6) have the store.
  * @returns {number} Opacity value between 0 and 1, defaults to 1 if unavailable
  */
 export function getBrushOpacity() {
-    // 1) Prefer the store value (source of truth)
+    // Prefer the store value (source of truth)
     const store = getMaskEditorStore();
     const storeOpacity = store?.brushSettings?.opacity;
     if (Number.isFinite(storeOpacity) && storeOpacity >= 0 && storeOpacity <= 1) {
         return storeOpacity;
-    }
-
-    // 2) Fallback to DOM: find opacity slider by characteristics (max <= 1, step <= 0.1)
-    const rangeInputs = document.querySelectorAll('input.maskEditor_sidePanelBrushRange');
-    for (const input of rangeInputs) {
-        const max = parseFloat(input.max);
-        const step = parseFloat(input.step);
-        if (max <= 1 && step <= 0.1) {
-            const parsed = parseFloat(input.value);
-            if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
-                return parsed;
-            }
-        }
     }
 
     // Default to fully opaque
@@ -326,28 +326,10 @@ export function getBrushOpacity() {
 }
 
 /**
- * Set brush opacity to both Pinia store and DOM slider.
+ * Set brush opacity through the Pinia store. The Vue opacity slider is bound to it, so no DOM sync
+ * is needed (see getBrushOpacity for why there is no DOM fallback).
  * @param {number} opacity - Opacity value between 0 and 1
  */
 export function setBrushOpacity(opacity) {
-    const clampedOpacity = Math.max(0, Math.min(1, opacity));
-
-    // 1) Write to store
-    const store = getMaskEditorStore();
-    if (store?.setBrushOpacity) {
-        store.setBrushOpacity(clampedOpacity);
-    }
-
-    // 2) Sync DOM: find opacity slider and update
-    const rangeInputs = document.querySelectorAll('input.maskEditor_sidePanelBrushRange');
-    for (const input of rangeInputs) {
-        const max = parseFloat(input.max);
-        const step = parseFloat(input.step);
-        if (max <= 1 && step <= 0.1) {
-            input.value = clampedOpacity;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            break;
-        }
-    }
+    getMaskEditorStore()?.setBrushOpacity?.(Math.max(0, Math.min(1, opacity)));
 }

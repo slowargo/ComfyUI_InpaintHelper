@@ -1038,11 +1038,12 @@ app.registerExtension({
 
                 const transferFn = async function () {
                     const button = node.widgets?.find((w) => w.name === "Run File Transfer");
-                    const originalName = button?.name;
+                    const originalLabel = button?.label;
 
                     try {
                         if (button) {
-                            button.name = "Running...";
+                            // label, not name: renaming a widget moves its key in the v1.53 widget value store
+                            button.label = "Running...";
                             app.graph.setDirtyCanvas(true, true);
                         }
 
@@ -1078,20 +1079,20 @@ app.registerExtension({
 
                         console.log("[slowargo.js] ServerFileTransfer result", result);
                         if (button) {
-                            button.name = result.message || "Done";
+                            button.label = result.message || "Done";
                             app.graph.setDirtyCanvas(true, true);
                             setTimeout(() => {
-                                button.name = originalName;
+                                button.label = originalLabel;
                                 app.graph.setDirtyCanvas(true, true);
                             }, 1500);
                         }
                     } catch (error) {
                         console.error("[slowargo.js] ServerFileTransfer failed", error);
                         if (button) {
-                            button.name = "Failed";
+                            button.label = "Failed";
                             app.graph.setDirtyCanvas(true, true);
                             setTimeout(() => {
-                                button.name = originalName;
+                                button.label = originalLabel;
                                 app.graph.setDirtyCanvas(true, true);
                             }, 2000);
                         }
