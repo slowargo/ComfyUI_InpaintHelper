@@ -13,13 +13,13 @@ import {
     createCloneButton,
     createSmudgeButton,
     createTransformButton,
+    createToolHint,
     handleBrushToolKeydown,
     handleBrushToolKeyup,
     initCloneToolEvents,
     initSmudgeToolEvents,
     cleanupAllBrushTools,
     deactivateAllCustomTools,
-    brushToolOverlay,
 } from "./brushTools/maskEditorBrushTools.js";
 
 loadCSS(import.meta.url, "./maskEditorTurbo.css");
@@ -724,6 +724,7 @@ function addFastForwardToggleButton() {
     buttonContainer.appendChild(reloadMaskOnlyBtn);
     buttonContainer.appendChild(reloadAllBtn);
     buttonContainer.appendChild(blurBtn);
+    buttonContainer.appendChild(createToolHint());
 
     updateToggleStyle();
     updateCloneStyle();
@@ -977,7 +978,6 @@ export function initFastForwardMode() {
         if (toolPanel) {
             toolPanelHandler = (e) => {
                 deactivateAllCustomTools();
-                brushToolOverlay?.classList.remove('active');
             };
             toolPanel.addEventListener('click', toolPanelHandler);
         }

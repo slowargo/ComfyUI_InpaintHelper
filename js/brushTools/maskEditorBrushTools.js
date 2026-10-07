@@ -3,6 +3,7 @@ import {
     cleanupTransform,
     isTransformActive,
     initTransformToolEvents,
+    handleTransformKeydown,
 } from "./transform/maskEditorBrushToolsTransform.js";
 import { ensurePaintLayerVisible, saveCanvasHistory, getMaskEditorCanvasContainer } from "./common/helpers.js";
 import { setSharedOverlay, setSharedCanvases } from "./common/sharedCanvasRefs.js";
@@ -222,6 +223,42 @@ function deactivateAllCustomTools() {
 
     // Restore original opacity if overridden
     restoreOpacityOverride();
+    syncActiveToolUi();
+}
+
+// Shortcut hint shown under the toolbar while a tool is active
+let toolHintRef = null;
+
+const TOOL_HINTS = {
+    clone: "Alt+Click: set source · Drag: paint · C / Esc: exit",
+    smudge: "Drag: smudge · S / Esc: exit",
+    transform: "Drag: select (click: pick object) · Ctrl+A: select all · Arrows: move 1px (Shift: 10px)"
+        + " · H / V: flip · R / Shift+R: rotate 45° · Q / Esc: exit",
+};
+
+/**
+ * Create the shortcut hint element. The caller places it inside the toolbar container.
+ * @returns {HTMLDivElement}
+ */
+function createToolHint() {
+    toolHintRef = document.createElement("div");
+    toolHintRef.className = "brush-tool-hint";
+    syncActiveToolUi();
+    return toolHintRef;
+}
+
+/**
+ * Sync the overlay's pointer capture and the shortcut hint with the currently active tool.
+ */
+function syncActiveToolUi() {
+    brushToolOverlay?.classList.toggle('active', isAnyCustomToolActive());
+    if (!toolHintRef) return;
+    const hint = editorState.cloneBrush.active ? TOOL_HINTS.clone
+        : editorState.smudgeBrush.active ? TOOL_HINTS.smudge
+        : isTransformActive() ? TOOL_HINTS.transform
+        : "";
+    toolHintRef.textContent = hint;
+    toolHintRef.hidden = !hint;
 }
 
 /**
@@ -681,9 +718,7 @@ function createCloneButton() {
             editorState.cloneBrush.active = true;
             updateCloneStyle();
         }
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
-        }
+        syncActiveToolUi();
         // console.log("[slowargo.js] Clone Brush:", editorState.cloneBrush.active ? "enabled" : "disabled");
     });
 
@@ -721,9 +756,7 @@ function createSmudgeButton() {
             editorState.smudgeBrush.active = true;
             updateSmudgeStyle();
         }
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
-        }
+        syncActiveToolUi();
         // console.log("[slowargo.js] Smudge Brush:", editorState.smudgeBrush.active ? "enabled" : "disabled");
     });
 
@@ -751,7 +784,9 @@ function createTransformButton() {
     const transformBtn = document.createElement("button");
     transformBtn.className = "fast-forward-mode-toggle";
     transformBtn.id = "transform-tool-button";
-    transformBtn.title = "Transform Tool (Q): Select and transform paint layer content";
+    transformBtn.title = "Transform Tool (Q): Select and transform paint layer content\n"
+        + "Ctrl+A: select all · Arrows: move 1px (Shift: 10px)\n"
+        + "H / V: flip horizontal / vertical · R / Shift+R: rotate 45° CW / CCW";
 
     const transformIcon = document.createElement("i");
     transformIcon.className = "pi pi-arrows-alt";
@@ -774,9 +809,7 @@ function createTransformButton() {
             initTransformToolEvents();
             updateTransformStyle();
         }
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
-        }
+        syncActiveToolUi();
         // console.log("[slowargo.js] Transform Tool:", isTransformActive() ? "enabled" : "disabled");
     });
 
@@ -793,6 +826,11 @@ function createTransformButton() {
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeydown(e) {
+    // Transform tool shortcuts (Ctrl+A, arrows, H/V/R); only while Transform is active
+    if (handleTransformKeydown(e)) {
+        return true;
+    }
+
     // Ignore tool hotkeys when system modifiers are pressed (e.g. Ctrl+C / Alt+S / Cmd+Q).
     const hasSystemModifier = e.ctrlKey || e.altKey || e.metaKey;
     if (hasSystemModifier) {
@@ -817,9 +855,7 @@ function handleBrushToolKeydown(e) {
             editorState.cloneBrush.active = true;
             updateCloneStyle();
         }
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
-        }
+        syncActiveToolUi();
         return true;
     }
 
@@ -835,9 +871,7 @@ function handleBrushToolKeydown(e) {
             editorState.smudgeBrush.active = true;
             updateSmudgeStyle();
         }
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
-        }
+        syncActiveToolUi();
         return true;
     }
 
@@ -853,9 +887,7 @@ function handleBrushToolKeydown(e) {
             initTransformToolEvents();
             updateTransformStyle();
         }
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.toggle('active', isAnyCustomToolActive());
-        }
+        syncActiveToolUi();
         return true;
     }
 
@@ -867,9 +899,6 @@ function handleBrushToolKeydown(e) {
         e.preventDefault();
         e.stopImmediatePropagation();
         deactivateAllCustomTools();
-        if (brushToolOverlay) {
-            brushToolOverlay.classList.remove('active');
-        }
         return true;
     }
 
@@ -965,6 +994,7 @@ export {
     createCloneButton,
     createSmudgeButton,
     createTransformButton,
+    createToolHint,
 
     // Keyboard handlers
     handleBrushToolKeydown,

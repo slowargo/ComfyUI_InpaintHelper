@@ -8,6 +8,8 @@ import {
 import {
     detectHandle,
     getBounds,
+    getQuadCenter,
+    getRotateHandle,
     getSourceCorners,
     hasCornersChanged,
     isPointInQuad,
@@ -217,20 +219,7 @@ function onTransformPointerDown(e) {
         }
 
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
-        const shouldRestoreCutPixels = Boolean(
-            transformToolState.selection?.cutFromPaint &&
-            !transformToolState.selection?.hasAppliedTransform &&
-            !transformToolState.selection?.pendingTransform &&
-            !transformToolState.selection?.paintDirtySinceLastSave
-        );
-        transformToolState.previousSession = {
-            selection: transformToolState.selection,
-            transform: transformToolState.transform,
-            shouldRestoreCutPixels,
-        };
-        // 这里允许 clearSelection 内部按 dirty 标记落盘（若此前有实际变换提交），
-        // 但禁止回填像素，并保留资源供后续失败回滚。
-        clearSelection(false, true); // 不还原像素，并保留资源用于回滚
+        stashSessionForNewSelection();
         transformToolState.stage = 'selecting';
         startSelection(pos);
     } else if (transformToolState.stage === 'selecting') {
@@ -358,18 +347,59 @@ function updateSelection(pos) {
 }
 
 /**
+ * 保存当前选区会话并清除选区，为创建新选区做准备（不还原像素，以便新选区无效时恢复）
+ */
+function stashSessionForNewSelection() {
+    const shouldRestoreCutPixels = Boolean(
+        transformToolState.selection?.cutFromPaint &&
+        !transformToolState.selection?.hasAppliedTransform &&
+        !transformToolState.selection?.pendingTransform &&
+        !transformToolState.selection?.paintDirtySinceLastSave
+    );
+    transformToolState.previousSession = {
+        selection: transformToolState.selection,
+        transform: transformToolState.transform,
+        shouldRestoreCutPixels,
+    };
+    // 这里允许 clearSelection 内部按 dirty 标记落盘（若此前有实际变换提交），
+    // 但禁止回填像素，并保留资源供后续失败回滚。
+    clearSelection(false, true); // 不还原像素，并保留资源用于回滚
+}
+
+/**
  * 完成框选
  */
 function finalizeSelection() {
     if (!selectionStart) return;
 
+    const currentPos = transformToolState.lastMousePos || selectionStart;
+    createSelection(normalizeRect(selectionStart, currentPos));
+}
+
+/**
+ * Ctrl+A：以整张画布为选区。取像素规则与框选相同（paint 有内容取 paint，否则取 base）
+ */
+function selectAll() {
+    // 鼠标框选进行中，不打断
+    if (transformToolState.stage === 'selecting') return;
+
+    if (transformToolState.stage === 'transforming') {
+        stashSessionForNewSelection();
+    }
+    // createSelection 内的 snapRectToCanvasPixels 会裁剪到画布尺寸
+    createSelection({ x: 0, y: 0, width: Infinity, height: Infinity });
+    renderTransforming();
+}
+
+/**
+ * 按画布坐标矩形创建选区并进入 transforming；选区无效时恢复旧选区
+ */
+function createSelection(rawRect) {
     const paintCanvas = getSharedPaintCanvas();
     const baseCanvas = getSharedBaseCanvas();
     const canvasWidth = paintCanvas?.width || baseCanvas?.width || 0;
     const canvasHeight = paintCanvas?.height || baseCanvas?.height || 0;
 
-    const currentPos = transformToolState.lastMousePos || selectionStart;
-    const rawRect = normalizeRect(selectionStart, currentPos);
     let rect = snapRectToCanvasPixels(rawRect, canvasWidth, canvasHeight);
     let sourceData = null;
     let cutFromPaint = true;
@@ -561,29 +591,10 @@ function updateDrag(pos) {
         transformToolState.transform.corners[nextIndex].y = drag.startTransform.corners[nextIndex].y + projection * normal.y;
     } else if (drag.type === 'rotate') {
         // 旋转：计算中心点和旋转角度
-        const center = {
-            x: (drag.startTransform.corners[0].x + drag.startTransform.corners[1].x +
-                drag.startTransform.corners[2].x + drag.startTransform.corners[3].x) / 4,
-            y: (drag.startTransform.corners[0].y + drag.startTransform.corners[1].y +
-                drag.startTransform.corners[2].y + drag.startTransform.corners[3].y) / 4
-        };
-
-        // 计算旋转角度
+        const center = getQuadCenter(drag.startTransform.corners);
         const startAngle = Math.atan2(drag.startMouse.y - center.y, drag.startMouse.x - center.x);
         const currentAngle = Math.atan2(pos.y - center.y, pos.x - center.x);
-        const deltaAngle = currentAngle - startAngle;
-
-        // 应用旋转到所有角点
-        const cos = Math.cos(deltaAngle);
-        const sin = Math.sin(deltaAngle);
-
-        for (let i = 0; i < 4; i++) {
-            const relX = drag.startTransform.corners[i].x - center.x;
-            const relY = drag.startTransform.corners[i].y - center.y;
-
-            transformToolState.transform.corners[i].x = center.x + relX * cos - relY * sin;
-            transformToolState.transform.corners[i].y = center.y + relX * sin + relY * cos;
-        }
+        transformToolState.transform.corners = rotateCorners(drag.startTransform.corners, center, currentAngle - startAngle);
     }
 
     // 请求节流渲染（准实时预览）
@@ -654,17 +665,82 @@ function endDrag() {
         transform?.corners
     );
     if (didGeometryChange) {
-        // 延迟提交：拖动结束只更新预览，不立即写入 paint 层
-        if (transformToolState.selection) {
-            transformToolState.selection.pendingTransform = true;
-            // 几何变化意味着后续 applyTransform 会实际改动 paint，
-            // 因此提前打脏标，确保 clearSelection 时只落一次 history。
-            transformToolState.selection.paintDirtySinceLastSave = true;
-        }
+        markTransformPending();
     }
 
     transformToolState.drag.active = false;
     renderTransforming();
+}
+
+/**
+ * 延迟提交：几何变化后只更新预览，不立即写入 paint 层
+ */
+function markTransformPending() {
+    if (!transformToolState.selection) return;
+    transformToolState.selection.pendingTransform = true;
+    // 几何变化意味着后续 applyTransform 会实际改动 paint，
+    // 因此提前打脏标，确保 clearSelection 时只落一次 history。
+    transformToolState.selection.paintDirtySinceLastSave = true;
+}
+
+// === Keyboard ===
+
+const ROTATE_STEP = Math.PI / 4;
+
+/**
+ * 以中心为原点旋转四角（canvas 坐标 y 向下，angle > 0 为顺时针）
+ */
+function rotateCorners(corners, center, angle) {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return corners.map(c => {
+        const relX = c.x - center.x;
+        const relY = c.y - center.y;
+        return { x: center.x + relX * cos - relY * sin, y: center.y + relX * sin + relY * cos };
+    });
+}
+
+/**
+ * Transform 工具快捷键（工具激活时）：
+ * Ctrl+A 全选；有选区时，方向键移动 1px（Shift 10px），H/V 水平/垂直翻转，R/Shift+R 顺/逆时针旋转 45°。
+ * 翻转、旋转都以选区中心为轴、按屏幕方向；和鼠标拖动一样只更新预览，清除选区时一次性提交。
+ * @param {KeyboardEvent} e
+ * @returns {boolean} true 表示已处理
+ */
+function handleTransformKeydown(e) {
+    if (!isTransformActive() || transformToolState.drag.active || e.altKey) return false;
+
+    if (e.ctrlKey || e.metaKey) {
+        if (e.shiftKey || (e.key !== 'a' && e.key !== 'A')) return false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        selectAll();
+        return true;
+    }
+
+    if (transformToolState.stage !== 'transforming') return false;
+
+    const corners = transformToolState.transform.corners;
+    const center = getQuadCenter(corners);
+    const step = e.shiftKey ? 10 : 1;
+    let next;
+    switch (e.key) {
+        case 'ArrowLeft': next = corners.map(c => ({ x: c.x - step, y: c.y })); break;
+        case 'ArrowRight': next = corners.map(c => ({ x: c.x + step, y: c.y })); break;
+        case 'ArrowUp': next = corners.map(c => ({ x: c.x, y: c.y - step })); break;
+        case 'ArrowDown': next = corners.map(c => ({ x: c.x, y: c.y + step })); break;
+        case 'h': case 'H': next = corners.map(c => ({ x: 2 * center.x - c.x, y: c.y })); break;
+        case 'v': case 'V': next = corners.map(c => ({ x: c.x, y: 2 * center.y - c.y })); break;
+        case 'r': case 'R': next = rotateCorners(corners, center, e.shiftKey ? -ROTATE_STEP : ROTATE_STEP); break;
+        default: return false;
+    }
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    transformToolState.transform.corners = next;
+    markTransformPending();
+    requestThrottledRender();
+    return true;
 }
 
 /**
@@ -808,15 +884,7 @@ function drawHandles(ctx, corners) {
     }
 
     // 绘制旋转手柄
-    const handleLength = screenToCanvasLength(30);  // 30px 屏幕长度
-    const topCenter = {
-        x: (corners[0].x + corners[1].x) / 2,
-        y: (corners[0].y + corners[1].y) / 2
-    };
-    const rotateHandle = {
-        x: topCenter.x,
-        y: topCenter.y - handleLength
-    };
+    const { anchor: topCenter, handle: rotateHandle } = getRotateHandle(corners);
 
     // 连接线
     ctx.strokeStyle = '#4a9eff';
@@ -959,4 +1027,5 @@ export {
     initTransformToolEvents,
     cleanupTransform,
     isTransformActive,
+    handleTransformKeydown,
 };

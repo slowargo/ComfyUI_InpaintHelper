@@ -115,6 +115,21 @@ body.mask-editor-blur-active {
     pointer-events: auto;
 }
 
+/* Shortcut hint for the active brush tool, hung below the button container */
+.brush-tool-hint {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 /* === Canvas Container === */
 /* Set position: relative to establish positioning context for absolutely positioned children */
 .ff-mode-canvas-container-parent {

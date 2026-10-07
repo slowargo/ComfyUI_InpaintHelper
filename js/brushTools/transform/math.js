@@ -62,6 +62,32 @@ function pointToSegmentDistance(point, a, b) {
 }
 
 /**
+ * 四角的平均点，作为旋转、翻转的中心
+ */
+function getQuadCenter(corners) {
+    return {
+        x: (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4,
+        y: (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4
+    };
+}
+
+/**
+ * 旋转手柄位置：anchor 为所在边的中点，handle 为手柄圆心
+ * 挂在当前最上方的边上，而不是固定的 corners[0]-[1]：翻转或旋转超过 90° 后那条边可能已经不在上面，
+ * 手柄会落进选区内部
+ */
+function getRotateHandle(corners) {
+    let anchor = null;
+    for (let i = 0; i < 4; i++) {
+        const next = (i + 1) % 4;
+        const mid = { x: (corners[i].x + corners[next].x) / 2, y: (corners[i].y + corners[next].y) / 2 };
+        if (!anchor || mid.y < anchor.y) anchor = mid;
+    }
+    const handleLength = screenToCanvasLength(30);  // 30px 屏幕长度
+    return { anchor, handle: { x: anchor.x, y: anchor.y - handleLength } };
+}
+
+/**
  * 检测句柄（优先级：四角 > 旋转手柄 > 四边 > 选区内部）
  */
 function detectHandle(pos, transform) {
@@ -77,15 +103,7 @@ function detectHandle(pos, transform) {
     }
 
     // 2. 检测旋转手柄 - 10px 阈值（屏幕坐标）
-    const handleLength = screenToCanvasLength(30);  // 30px 屏幕长度
-    const topCenter = {
-        x: (corners[0].x + corners[1].x) / 2,
-        y: (corners[0].y + corners[1].y) / 2
-    };
-    const rotateHandle = {
-        x: topCenter.x,
-        y: topCenter.y - handleLength
-    };
+    const { handle: rotateHandle } = getRotateHandle(corners);
     const rotateDist = Math.hypot(pos.x - rotateHandle.x, pos.y - rotateHandle.y);
     if (rotateDist <= screenToCanvasLength(10)) {
         return { type: "rotate", index: -1 };
@@ -195,6 +213,8 @@ export {
     screenToCanvasLength,
     isPointInQuad,
     pointToSegmentDistance,
+    getQuadCenter,
+    getRotateHandle,
     detectHandle,
     getBounds,
     hasCornersChanged,
