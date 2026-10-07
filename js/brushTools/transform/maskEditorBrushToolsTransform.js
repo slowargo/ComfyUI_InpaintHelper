@@ -219,7 +219,20 @@ function onTransformPointerDown(e) {
         }
 
         // 在选区外：保存旧选区状态，开始新框选（不还原像素，以便失败时恢复）
-        stashSessionForNewSelection();
+        const shouldRestoreCutPixels = Boolean(
+            transformToolState.selection?.cutFromPaint &&
+            !transformToolState.selection?.hasAppliedTransform &&
+            !transformToolState.selection?.pendingTransform &&
+            !transformToolState.selection?.paintDirtySinceLastSave
+        );
+        transformToolState.previousSession = {
+            selection: transformToolState.selection,
+            transform: transformToolState.transform,
+            shouldRestoreCutPixels,
+        };
+        // 这里允许 clearSelection 内部按 dirty 标记落盘（若此前有实际变换提交），
+        // 但禁止回填像素，并保留资源供后续失败回滚。
+        clearSelection(false, true); // 不还原像素，并保留资源用于回滚
         transformToolState.stage = 'selecting';
         startSelection(pos);
     } else if (transformToolState.stage === 'selecting') {
@@ -347,26 +360,6 @@ function updateSelection(pos) {
 }
 
 /**
- * 保存当前选区会话并清除选区，为创建新选区做准备（不还原像素，以便新选区无效时恢复）
- */
-function stashSessionForNewSelection() {
-    const shouldRestoreCutPixels = Boolean(
-        transformToolState.selection?.cutFromPaint &&
-        !transformToolState.selection?.hasAppliedTransform &&
-        !transformToolState.selection?.pendingTransform &&
-        !transformToolState.selection?.paintDirtySinceLastSave
-    );
-    transformToolState.previousSession = {
-        selection: transformToolState.selection,
-        transform: transformToolState.transform,
-        shouldRestoreCutPixels,
-    };
-    // 这里允许 clearSelection 内部按 dirty 标记落盘（若此前有实际变换提交），
-    // 但禁止回填像素，并保留资源供后续失败回滚。
-    clearSelection(false, true); // 不还原像素，并保留资源用于回滚
-}
-
-/**
  * 完成框选
  */
 function finalizeSelection() {
@@ -383,8 +376,10 @@ function selectAll() {
     // 鼠标框选进行中，不打断
     if (transformToolState.stage === 'selecting') return;
 
+    // 直接结束旧选区（回填未变换的剪切、提交待定变换），不走框选的失败回滚：
+    // 否则 paint 被剪切后仍是空的，新的全选会误取 base 层。全画布选区只在两层都为空时才会失败。
     if (transformToolState.stage === 'transforming') {
-        stashSessionForNewSelection();
+        clearSelection();
     }
     // createSelection 内的 snapRectToCanvasPixels 会裁剪到画布尺寸
     createSelection({ x: 0, y: 0, width: Infinity, height: Infinity });
@@ -431,7 +426,9 @@ function createSelection(rawRect) {
         }
         // 检测选区内容
         const paintData = samplePaintLayer(rect);
-        const minPixels = Math.max(16, Math.floor(rect.width * rect.height * 0.005));
+        // 全画布选区（Ctrl+A，或框到画布外）用固定阈值：按面积比例算会把不大的 paint 内容当成空，转而取 base
+        const isFullCanvas = rect.width === canvasWidth && rect.height === canvasHeight;
+        const minPixels = isFullCanvas ? 16 : Math.max(16, Math.floor(rect.width * rect.height * 0.005));
         const isEmpty = isImageDataEmpty(paintData, minPixels);
 
         sourceData = paintData;
@@ -708,17 +705,20 @@ function rotateCorners(corners, center, angle) {
  * @returns {boolean} true 表示已处理
  */
 function handleTransformKeydown(e) {
-    if (!isTransformActive() || transformToolState.drag.active || e.altKey) return false;
+    if (!isTransformActive() || e.altKey) return false;
 
     if (e.ctrlKey || e.metaKey) {
         if (e.shiftKey || (e.key !== 'a' && e.key !== 'A')) return false;
         e.preventDefault();
         e.stopImmediatePropagation();
-        selectAll();
+        // 拖动中或按住不放的重复事件只吞掉（不让浏览器全选页面文字）
+        if (!e.repeat && !transformToolState.drag.active) {
+            selectAll();
+        }
         return true;
     }
 
-    if (transformToolState.stage !== 'transforming') return false;
+    if (transformToolState.drag.active || transformToolState.stage !== 'transforming') return false;
 
     const corners = transformToolState.transform.corners;
     const center = getQuadCenter(corners);
@@ -737,6 +737,8 @@ function handleTransformKeydown(e) {
 
     e.preventDefault();
     e.stopImmediatePropagation();
+    // 方向键允许按住连续移动；翻转、旋转按住不放时只生效一次
+    if (e.repeat && !e.key.startsWith('Arrow')) return true;
     transformToolState.transform.corners = next;
     markTransformPending();
     requestThrottledRender();

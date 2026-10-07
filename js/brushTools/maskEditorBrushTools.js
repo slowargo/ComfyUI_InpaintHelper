@@ -818,6 +818,15 @@ function createTransformButton() {
 
 // === Keyboard Event Handler ===
 
+// Inputs that don't take typed text; tool hotkeys keep working after clicking one of these
+const NON_TYPING_INPUT_TYPES = new Set(['range', 'checkbox', 'radio', 'button', 'color', 'file']);
+
+function isTypingTarget(e) {
+    const target = e.composedPath()[0];
+    if (target?.tagName === 'INPUT') return !NON_TYPING_INPUT_TYPES.has(target.type);
+    return target?.tagName === 'TEXTAREA' || Boolean(target?.isContentEditable);
+}
+
 /**
  * Handle keyboard events for brush tools.
  * Currently handles Esc to deactivate tools, Space to allow mask editor pan,
@@ -826,6 +835,11 @@ function createTransformButton() {
  * @returns {boolean} true if the event was handled, false otherwise
  */
 function handleBrushToolKeydown(e) {
+    // Leave keys to text fields in the side panel (e.g. brush size); Esc still exits the tools
+    if (e.key !== 'Escape' && isTypingTarget(e)) {
+        return false;
+    }
+
     // Transform tool shortcuts (Ctrl+A, arrows, H/V/R); only while Transform is active
     if (handleTransformKeydown(e)) {
         return true;
@@ -943,6 +957,7 @@ function cleanupAllBrushTools() {
     const overlay = brushToolOverlay || document.querySelector('#maskEditorCanvasContainer #brush-tool-overlay');
     if (overlay) overlay.remove();
     brushToolOverlay = null;
+    toolHintRef = null;
 
     // Clear transform module shared canvas references to avoid detached canvas retention
     setSharedOverlay(null);
