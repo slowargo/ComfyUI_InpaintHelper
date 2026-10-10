@@ -4,7 +4,9 @@ import { api } from "../../scripts/api.js";
 import { $el } from "../../scripts/ui.js";
 import { initFastForwardMode, performMaskSave } from "./maskEditorTurbo.js";
 import { setupWidgetPreset } from "./widgetPreset.js";
-import { loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath, getWorkflowStore } from "./utils.js";
+import {
+    loadCSS, updateNodePreview, getComfyFilePathFromViewUrl, parseFilePath, getWorkflowStore, getToastStore,
+} from "./utils.js";
 
 loadCSS(import.meta.url, "./slowargo.css");
 
@@ -1029,41 +1031,77 @@ app.registerExtension({
                     return String(imageValue).trim();
                 };
 
-                const rejectConnectedInput = function(name) {
-                    if (inputHasLink(name)) {
-                        const hint = name === "source_path" ? "Use image_source or Auto mode." : "Use Auto mode.";
-                        throw new Error(`Run File Transfer does not support connected ${name}. ${hint}`);
+                // Connected values are only known after a run: in Manual mode the backend resolves the
+                // source and target during execution and returns them as the transfer plan.
+                let transferPlan = null;
+                let planVersion = 0;
+                let busy = false;
+                const PATH_INPUTS = ["source_path", "target_dir", "target_filename"];
+
+                const setTransferPlan = function(plan) {
+                    transferPlan = plan;
+                    planVersion++;
+                    const button = node.widgets?.find((w) => w.name === "Run File Transfer");
+                    if (button) {
+                        // label, not name: renaming a widget moves its key in the v1.53 widget value store.
+                        // Kept short so it fits the node; the full target goes to the tooltip and toasts.
+                        button.label = plan ? "Run File Transfer (ready)" : "Run File Transfer";
+                        button.tooltip = plan ? `→ ${plan.target_dir}\\${plan.target_filename}` : undefined;
+                        app.graph.setDirtyCanvas(true, true);
                     }
                 };
 
+                const origOnExecutionStart = this.onExecutionStart;
+                this.onExecutionStart = function() {
+                    origOnExecutionStart?.apply(this, arguments);
+                    setTransferPlan(null);
+                };
+
+                const origOnExecuted = this.onExecuted;
+                this.onExecuted = function(output) {
+                    origOnExecuted?.apply(this, arguments);
+                    setTransferPlan(output?.transfer_plan?.[0] ?? null);
+                };
+
                 const transferFn = async function () {
+                    if (busy) {
+                        return;
+                    }
+                    busy = true;
                     const button = node.widgets?.find((w) => w.name === "Run File Transfer");
                     const originalLabel = button?.label;
+                    const usePlan = PATH_INPUTS.some(inputHasLink);
+                    // One plan, one transfer: taken now so it cannot be committed twice, restored on failure
+                    const plan = usePlan ? transferPlan : null;
+                    const version = planVersion;
+                    transferPlan = null;
 
                     try {
                         if (button) {
-                            // label, not name: renaming a widget moves its key in the v1.53 widget value store
                             button.label = "Running...";
                             app.graph.setDirtyCanvas(true, true);
                         }
 
                         syncSourcePathVisibility();
 
-                        rejectConnectedInput("target_dir");
-                        rejectConnectedInput("target_filename");
-                        rejectConnectedInput("move_file");
+                        if (inputHasLink("move_file")) {
+                            throw new Error("Run File Transfer does not support connected move_file.");
+                        }
 
-                        const options = {
-                            target_dir: getWidgetValue("target_dir"),
-                            target_filename: getWidgetValue("target_filename"),
-                            move_file: !!getWidgetValue("move_file"),
-                        };
-
-                        if (inputHasLink("image_source")) {
-                            options.image_source = getImageSourceValue();
+                        const options = { move_file: !!getWidgetValue("move_file") };
+                        if (usePlan) {
+                            if (!plan) {
+                                throw new Error("Connected inputs are resolved by a Manual-mode run. Run first.");
+                            }
+                            Object.assign(options, plan);
                         } else {
-                            rejectConnectedInput("source_path");
-                            options.source_path = getWidgetValue("source_path");
+                            options.target_dir = getWidgetValue("target_dir");
+                            options.target_filename = getWidgetValue("target_filename");
+                            if (inputHasLink("image_source")) {
+                                options.image_source = getImageSourceValue();
+                            } else {
+                                options.source_path = getWidgetValue("source_path");
+                            }
                         }
 
                         const response = await api.fetchApi("/slowargo_api/file_transfer", {
@@ -1078,24 +1116,43 @@ app.registerExtension({
                         }
 
                         console.log("[slowargo.js] ServerFileTransfer result", result);
+                        getToastStore()?.add({
+                            severity: "success", summary: "File Transfer", detail: result.message, life: 4000,
+                        });
                         if (button) {
-                            button.label = result.message || "Done";
+                            button.label = "Done";
                             app.graph.setDirtyCanvas(true, true);
                             setTimeout(() => {
-                                button.label = originalLabel;
-                                app.graph.setDirtyCanvas(true, true);
+                                if (usePlan) {
+                                    setTransferPlan(transferPlan); // a newer run may have planned meanwhile
+                                } else {
+                                    button.label = originalLabel;
+                                    app.graph.setDirtyCanvas(true, true);
+                                }
                             }, 1500);
                         }
                     } catch (error) {
                         console.error("[slowargo.js] ServerFileTransfer failed", error);
+                        if (planVersion === version) {
+                            transferPlan = plan; // no run has replaced or cleared it meanwhile
+                        }
+                        getToastStore()?.add({
+                            severity: "error", summary: "File Transfer failed", detail: error.message, life: 8000,
+                        });
                         if (button) {
                             button.label = "Failed";
                             app.graph.setDirtyCanvas(true, true);
                             setTimeout(() => {
-                                button.label = originalLabel;
-                                app.graph.setDirtyCanvas(true, true);
-                            }, 2000);
+                                if (usePlan) {
+                                    setTransferPlan(transferPlan);
+                                } else {
+                                    button.label = originalLabel;
+                                    app.graph.setDirtyCanvas(true, true);
+                                }
+                            }, 4000);
                         }
+                    } finally {
+                        busy = false;
                     }
                 };
 

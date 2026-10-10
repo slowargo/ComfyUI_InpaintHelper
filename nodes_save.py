@@ -1,4 +1,4 @@
-"""图像保存与服务端文件搬运，以及前端触发搬运的那条 API 路由。
+"""图像保存、按文件名定位原文件、服务端文件搬运，以及前端触发搬运的那条 API 路由。
 
 路由是 import 时注册的副作用，__init__.py 里对本模块的导入不能删。
 """
@@ -46,6 +46,9 @@ class SaveImageToFileName(nodes.SaveImage):
             },
         }
 
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("file_path",)
+    OUTPUT_TOOLTIPS = ("Absolute path of the saved file.",)
     FUNCTION = "save_image"
     CATEGORY = "Slowargo"
 
@@ -201,7 +204,7 @@ class SaveImageToFileName(nodes.SaveImage):
         if auto_open:
             PromptServer.instance.send_sync("slowargo.js.extension.SaveImageToFileName", {"results": results})
 
-        return {"ui": {"images": results}}
+        return {"ui": {"images": results}, "result": (str(full_file_path),)}
 
 
 class ExtractSubFolder:
@@ -278,7 +281,7 @@ def resolve_server_file_source_path(source_path):
     return Path(folder_paths.get_annotated_filepath(source_text, output_dir)).expanduser()
 
 
-def transfer_server_file(source_path, target_dir, target_filename, move_file=False):
+def plan_server_file_transfer(source_path, target_dir, target_filename):
     target_dir_text = str(target_dir or "").strip()
     target_filename_text = str(target_filename or "").strip()
 
@@ -286,7 +289,6 @@ def transfer_server_file(source_path, target_dir, target_filename, move_file=Fal
         raise ValueError("target_dir is required")
 
     source = resolve_server_file_source_path(source_path)
-    target_directory = Path(target_dir_text).expanduser()
     if not source.exists():
         raise FileNotFoundError(f"Source file does not exist: {source}")
     if not source.is_file():
@@ -296,8 +298,12 @@ def transfer_server_file(source_path, target_dir, target_filename, move_file=Fal
     if not filename:
         raise ValueError("target_filename is required when source_path has no file name")
 
-    target_directory.mkdir(parents=True, exist_ok=True)
-    target = target_directory / filename
+    return source, Path(target_dir_text).expanduser() / filename
+
+
+def transfer_server_file(source_path, target_dir, target_filename, move_file=False):
+    source, target = plan_server_file_transfer(source_path, target_dir, target_filename)
+    target.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         if source.resolve() == target.resolve():
@@ -352,8 +358,8 @@ class ServerFileTransfer:
                     "label_on": "Auto",
                     "label_off": "Manual",
                     "tooltip": (
-                        "Auto runs during prompt execution. Manual runs only from the node "
-                        "button."
+                        "Auto runs during prompt execution. Manual only resolves the source and "
+                        "target during execution; the node button then performs that transfer."
                     )
                 }),
             },
@@ -376,14 +382,25 @@ class ServerFileTransfer:
 
     def execute(self, source_path="", target_dir="", target_filename="", move_file=False,
                 auto_execute=True, image_source=None, prompt=None, node_id=None):
-        if not auto_execute:
-            return (source_path, "", False, "Skipped: manual mode")
-
         try:
             source_path = resolve_image_widget_source_path(prompt or {}, node_id, "image_source")
         except Exception:
-            if not str(source_path or "").strip():
+            # 连了 image_source 时 source_path 控件是隐藏的，不能回退到里面可能过期的值
+            image_source_linked = "image_source" in (prompt or {}).get(str(node_id), {}).get("inputs", {})
+            if image_source_linked or (auto_execute and not str(source_path or "").strip()):
                 raise
+
+        if not auto_execute:
+            # 只算出这次要搬的源和目标，交给节点按钮去执行，执行前可以先看清楚要覆盖哪个文件
+            try:
+                source, target = plan_server_file_transfer(source_path, target_dir, target_filename)
+            except (OSError, ValueError) as e:
+                return {"ui": {"transfer_plan": []}, "result": (str(source_path), "", False, f"Not planned: {e}")}
+            plan = {"source_path": str(source), "target_dir": str(target.parent), "target_filename": target.name}
+            return {
+                "ui": {"transfer_plan": [plan]},
+                "result": (str(source), str(target), False, "Planned: click Run File Transfer"),
+            }
 
         result = transfer_server_file(source_path, target_dir, target_filename, move_file)
         return (
@@ -392,6 +409,140 @@ class ServerFileTransfer:
             result["success"],
             result["message"],
         )
+
+
+# LocateFileByName 上次定位到的目录，下次先在这里找
+LAST_LOCATED_DIR_FILE = Path(folder_paths.get_user_directory()) / "slowargo_locate_file.json"
+
+
+def load_last_located_dir():
+    try:
+        state = json.loads(LAST_LOCATED_DIR_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    last_dir = state.get("last_dir") if isinstance(state, dict) else None
+    return last_dir if isinstance(last_dir, str) else ""
+
+
+def save_last_located_dir(directory):
+    try:
+        LAST_LOCATED_DIR_FILE.write_text(
+            json.dumps({"last_dir": str(directory)}, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"[LocateFileByName] failed to save last dir: {e}")
+
+
+# 至少这么多比例的像素各通道差值都不超过容差，才算同一张图。inpaint 只改局部、
+# 上一轮覆盖过的原图也能过；同名同尺寸的别的照片基本过不了
+SAME_IMAGE_TOLERANCE = 8
+SAME_IMAGE_MIN_FRACTION = 0.5
+
+
+def matches_reference(path, reference):
+    """reference 是 HxWx3 的 int16 像素数组，按 LoadImage 的方式（EXIF 转正、RGB）解码 path 再比较。"""
+    height, width = reference.shape[:2]
+    try:
+        with Image.open(path) as img:
+            if img.size not in ((width, height), (height, width)):
+                return False
+            pixels = np.asarray(ImageOps.exif_transpose(img).convert("RGB"), dtype=np.int16)
+    except OSError:
+        return False
+    if pixels.shape != reference.shape:
+        return False
+    close = (np.abs(pixels - reference) <= SAME_IMAGE_TOLERANCE).all(axis=2)
+    return close.mean() >= SAME_IMAGE_MIN_FRACTION
+
+
+def locate_file_by_name(filename, search_roots, reference=None):
+    """先查上次定位到的目录，再递归搜索 search_roots（";" 分隔），要求恰好一个同名文件。
+
+    reference 给了就只认内容与它一致的图片；ComfyUI 自己的 input/output/temp 目录不搜，那里只有上传的副本。
+    """
+    def accepted(path):
+        return reference is None or matches_reference(path, reference)
+
+    last_dir = load_last_located_dir()
+    if last_dir:
+        candidate = Path(last_dir) / filename
+        if candidate.is_file() and accepted(candidate):
+            return candidate
+
+    roots = [r.strip() for r in str(search_roots or "").split(";") if r.strip()]
+    if not roots:
+        raise FileNotFoundError(f"{filename} is not in the last dir ({last_dir or 'none'}) and search_roots is empty")
+
+    comfy_dirs = {os.path.normcase(os.path.realpath(d)) for d in (
+        folder_paths.get_input_directory(), folder_paths.get_output_directory(), folder_paths.get_temp_directory())}
+    wanted = os.path.normcase(filename)
+    matches, rejected, unreadable = [], [], []
+    for root in roots:
+        root_path = Path(root).expanduser()
+        if not root_path.is_dir():
+            raise FileNotFoundError(f"Search root does not exist: {root_path}")
+        for dir_path, dir_names, file_names in os.walk(root_path, onerror=lambda e: unreadable.append(e.filename)):
+            dir_names[:] = [
+                d for d in dir_names
+                if not os.path.isjunction(os.path.join(dir_path, d))
+                and os.path.normcase(os.path.realpath(os.path.join(dir_path, d))) not in comfy_dirs
+            ]
+            for f in file_names:
+                if os.path.normcase(f) == wanted:
+                    path = Path(dir_path) / f
+                    (matches if accepted(path) else rejected).append(path)
+
+    if unreadable:
+        logger.warning(f"[LocateFileByName] skipped unreadable dirs: {'; '.join(unreadable)}")
+    if not matches:
+        hint = f" ({len(rejected)} same-named file(s) differ from reference)" if rejected else ""
+        raise FileNotFoundError(f"{filename} was not found under: {'; '.join(roots)}{hint}")
+    if len(matches) > 1:
+        raise ValueError(f"{filename} was found in multiple places: {'; '.join(str(m) for m in matches)}")
+    return matches[0]
+
+
+class LocateFileByName:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "filename": ("STRING", {"default": "", "tooltip": "File name to look for. Parent paths are ignored."}),
+                "search_roots": ("STRING", {"default": "", "tooltip": (
+                    "';'-separated folders searched recursively when the file is not in the last "
+                    "located folder. ComfyUI's input/output/temp folders are skipped."
+                )}),
+            },
+            "optional": {
+                "reference": ("IMAGE", {"tooltip": (
+                    "Only accept an image whose pixels mostly match this one (an inpaint of it still "
+                    "matches)."
+                )}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("directory", "file_path")
+    DESCRIPTION = (
+        "Find the single file with this name: the last located folder first, then search_roots. "
+        "Fails when nothing or more than one file matches."
+    )
+    FUNCTION = "execute"
+    CATEGORY = "Slowargo"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        # 结果取决于磁盘上的文件，不能用缓存
+        return float("nan")
+
+    def execute(self, filename, search_roots, reference=None):
+        filename = os.path.basename(str(filename or "").strip())
+        if not filename:
+            raise ValueError("filename is required")
+        if reference is not None:
+            reference = (reference[0, :, :, :3].cpu().numpy() * 255).round().astype(np.int16)
+        path = locate_file_by_name(filename, search_roots, reference)
+        save_last_located_dir(path.parent)
+        return (str(path.parent), str(path))
 
 
 @PromptServer.instance.routes.post("/slowargo_api/file_transfer")

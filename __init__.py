@@ -26,7 +26,7 @@ from .nodes_util import (
     RefreshTriggerV1,
     RunButtonNode,
 )
-from .nodes_save import ExtractSubFolder, SaveImageToFileName, ServerFileTransfer
+from .nodes_save import ExtractSubFolder, LocateFileByName, SaveImageToFileName, ServerFileTransfer
 from .nodes_image_io import (
     ImageWidgetSourcePath,
     LoadImageFromAnyPath,
@@ -73,6 +73,7 @@ NODE_CLASS_MAPPINGS = {
     "RememberStrings": RememberStrings,
     "RunButtonNode": RunButtonNode,
     "ServerFileTransfer": ServerFileTransfer,
+    "LocateFileByName": LocateFileByName,
     "RefreshTriggerV1": RefreshTriggerV1,
     "ClearHistoryNode": ClearHistoryNode,
     "MaskedColorMatch": MaskedColorMatch,
@@ -95,6 +96,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RememberStrings": "Remember Recent Strings",
     "RunButtonNode": "Run Button",
     "ServerFileTransfer": "Server File Transfer",
+    "LocateFileByName": "Locate File By Name",
     "RefreshTriggerV1": "Refresh Trigger",
     "ClearHistoryNode": "Clear History",
     "MaskedColorMatch": "Masked Color Match (Inpaint Drift Fix)",
