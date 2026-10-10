@@ -664,7 +664,7 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             askName(app, "Preset name", defaultName, event, (name) => {
                 if (!name) return;
                 // Read everything again: the canvas prompt is not modal, so values, rules and even the presets
-                // themselves (rename/delete from the context menu) may have changed while it was open
+                // themselves (rename/move/delete from the context menu) may have changed while it was open
                 const latest = readPresets();
                 if (latest.error) return;
                 const items = latest.data.items;
@@ -760,6 +760,18 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
             writePresets(presets.data);
         };
 
+        // The button order is the items order
+        const movePreset = (name, offset) => {
+            const presets = readPresets();
+            if (presets.error) return;
+            const items = presets.data.items;
+            const from = items.findIndex((item) => item.name === name);
+            const to = from + offset;
+            if (from < 0 || to < 0 || to >= items.length) return;
+            items.splice(to, 0, items.splice(from, 1)[0]);
+            writePresets(presets.data);
+        };
+
         const origFilterCallback = filterWidget.callback;
         filterWidget.callback = function () {
             const callbackResult = origFilterCallback?.apply(this, arguments);
@@ -848,6 +860,26 @@ export function setupWidgetPreset(nodeType, nodeData, app) {
                         })),
                     },
                 });
+                if (items.length > 1) {
+                    entries.push({
+                        content: "⬆️ Move preset up",
+                        submenu: {
+                            options: items.slice(1).map((item) => ({
+                                content: item.name,
+                                callback: () => movePreset(item.name, -1),
+                            })),
+                        },
+                    });
+                    entries.push({
+                        content: "⬇️ Move preset down",
+                        submenu: {
+                            options: items.slice(0, -1).map((item) => ({
+                                content: item.name,
+                                callback: () => movePreset(item.name, 1),
+                            })),
+                        },
+                    });
+                }
                 entries.push({
                     content: "🗑️ Delete preset",
                     submenu: {

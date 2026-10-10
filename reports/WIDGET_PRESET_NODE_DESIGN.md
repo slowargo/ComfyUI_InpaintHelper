@@ -64,7 +64,7 @@ preset 类插件的形态都不一样：
 | 显示和隐藏 | 右键菜单里一个开关，同时显示或隐藏规则文本框和调试信息 |
 | 提示信息 | 状态行的提示显示精简的调试信息，预设按钮的提示显示这条预设的内容，调试区隐藏时也能查看 |
 | 对执行的影响 | 无。节点标记为虚拟节点，不会发给后端 |
-| 预设管理 | 每条预设一个按钮；改名、删除放在节点右键菜单 |
+| 预设管理 | 每条预设一个按钮；改名、删除、调整顺序放在节点右键菜单 |
 
 几个取舍的理由：
 
@@ -361,7 +361,7 @@ try {
 时机（`changeTracker.ts:303-326`），结果是 Ctrl+Z 撤回到更早的状态、workflow 不显示未保存标记，
 而且这次修改会被并进下一次无关操作的记录里。
 
-Save、改名、删除这三处修改 `presets` 的地方也一样用这对事务包起来。它们目前碰巧能产生撤销记录，
+Save、改名、删除、调整顺序这四处修改 `presets` 的地方也一样用这对事务包起来。它们目前碰巧能产生撤销记录，
 因为 `canvas.prompt` 和右键菜单关闭时会被 `changeTracker` 捕获（`changeTracker.ts:303-326`），但不要依赖这个。
 
 每条记录的处理：
@@ -389,9 +389,11 @@ Save、改名、删除这三处修改 `presets` 的地方也一样用这对事�
 
 ### 7.5 右键菜单
 
-在 `getExtraMenuOptions` 里加三项（1.37.2 仍会调用这个钩子，`LGraphCanvas.ts:8264`）：
+在 `getExtraMenuOptions` 里加这些项（1.37.2 仍会调用这个钩子，`LGraphCanvas.ts:8264`）：
 
 - `Rename preset`、`Delete preset`：子菜单，列出所有预设名
+- `Move preset up`、`Move preset down`：子菜单，列出可以上移（不含第一条）或下移（不含最后一条）的预设。
+  按钮顺序就是 `items` 的顺序，移动后重建按钮，能撤销。只有两条以上预设时才出现
 - `Show filter & debug info` / `Hide filter & debug info`：同时切换规则文本框和调试文本区的显示
 
 不在按钮上画删除图标，是因为 Vue 渲染模式下自己画的点击区域容易失效，原生菜单更可靠。
@@ -423,7 +425,7 @@ Save、改名、删除这三处修改 `presets` 的地方也一样用这对事�
 
 改为在这些时机重新计算，并用一个标记避免重复：
 
-- Apply、Save、改名、删除之后
+- Apply、Save、改名、删除、调整顺序之后
 - 本节点的 `onConnectionsChange`、`onAfterGraphConfigured`
 - `api` 的 `graphChanged` 事件（`changeTracker.ts:111`，每次记录历史时都会发）
 
