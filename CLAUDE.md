@@ -158,6 +158,8 @@ The extension uses a sophisticated file watching system in `get_recent_image_fil
 - `Ctrl+Alt+S`: Save mask and exit mask editor
 - `Ctrl+L` (in mask editor): Load most recent clipspace content (base, mask, paint layers)
 - `Enter` (in mask editor, with Fast Forward Mode enabled): Save mask → execute workflow → auto-refresh
+- Per-node (RefreshTriggerV1): context menu "Set Shortcut…" stores e.g. `ctrl+alt+r` in the node's `shortcut`
+  property; pressing it refreshes, adding Shift also opens the mask editor
 
 ## API Endpoints
 

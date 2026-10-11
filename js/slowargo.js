@@ -977,6 +977,86 @@ app.registerExtension({
 
                 this.constructor.exposedActions = ["Refresh"];
 
+                const MODIFIERS = ["ctrl", "alt", "shift", "meta"];
+                let capturing = false;
+                this.addProperty("shortcut", "", "string");
+
+                const keyOf = (e) => /^(Key|Digit)./.test(e.code) ? e.code.slice(-1).toLowerCase()
+                    : e.key === " " ? "space" : (e.key ?? "").toLowerCase();
+                const parseShortcut = () => {
+                    const parts = String(node.properties.shortcut ?? "").toLowerCase().split("+")
+                        .map(p => p.trim()).filter(Boolean);
+                    return parts.length ? { key: parts.pop(), mods: parts } : null;
+                };
+                const updateLabel = () => {
+                    const sc = parseShortcut();
+                    const shown = sc && [...MODIFIERS.filter(m => sc.mods.includes(m)), sc.key]
+                        .map(p => p[0].toUpperCase() + p.slice(1)).join("+");
+                    refreshBtn.label = capturing ? "Press keys… (Esc cancel, Backspace clear)"
+                        : shown ? `refresh (${shown})` : "";
+                    app.graph?.setDirtyCanvas(true, true);
+                };
+
+                const onKeyDown = (e) => {
+                    if (capturing) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+                        capturing = false;
+                        if (e.key === "Backspace" || e.key === "Delete") node.setProperty("shortcut", "");
+                        else if (e.key !== "Escape") {
+                            node.setProperty("shortcut", [...MODIFIERS.filter(m => e[m + "Key"]), keyOf(e)].join("+"));
+                        }
+                        updateLabel();
+                        return;
+                    }
+                    const sc = parseShortcut();
+                    const t = e.target;
+                    if (!sc || e.repeat || node.mode === 2 || node.mode === 4) return;
+                    if (t?.isContentEditable || t?.tagName === "INPUT" || t?.tagName === "TEXTAREA") return;
+                    if (keyOf(e) !== sc.key || (sc.mods.includes("shift") && !e.shiftKey)) return;
+                    if (["ctrl", "alt", "meta"].some(m => e[m + "Key"] !== sc.mods.includes(m))) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    refreshFn();
+                };
+                window.addEventListener("keydown", onKeyDown, true);
+
+                const origOnRemoved = this.onRemoved;
+                this.onRemoved = function() {
+                    window.removeEventListener("keydown", onKeyDown, true);
+                    return origOnRemoved?.apply(this, arguments);
+                };
+                // Copy/paste and alt-drag go through clone(); a duplicated shortcut would only ever fire one node
+                const origClone = this.clone;
+                this.clone = function() {
+                    const cloned = origClone.apply(this, arguments);
+                    cloned?.setProperty("shortcut", "");
+                    return cloned;
+                };
+                const origOnPropertyChanged = this.onPropertyChanged;
+                this.onPropertyChanged = function(name) {
+                    const changed = origOnPropertyChanged?.apply(this, arguments);
+                    if (name === "shortcut") updateLabel();
+                    return changed;
+                };
+                const origOnConfigure = this.onConfigure;
+                this.onConfigure = function() {
+                    const configured = origOnConfigure?.apply(this, arguments);
+                    updateLabel();
+                    return configured;
+                };
+                const origGetExtraMenuOptions = this.getExtraMenuOptions;
+                this.getExtraMenuOptions = (canvas, options) => {
+                    const extraOptions = origGetExtraMenuOptions?.call(this, canvas, options);
+                    const startCapture = () => { capturing = true; updateLabel(); };
+                    const entries = [{ content: "Set Shortcut…", callback: startCapture }];
+                    if (parseShortcut()) {
+                        entries.push({ content: "Clear Shortcut", callback: () => node.setProperty("shortcut", "") });
+                    }
+                    return Array.isArray(extraOptions) ? [...extraOptions, ...entries] : entries;
+                };
+
                 return result;
             };
         } else if (nodeType?.comfyClass == "ServerFileTransfer") {
