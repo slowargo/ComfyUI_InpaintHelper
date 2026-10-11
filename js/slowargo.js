@@ -44,6 +44,52 @@ const PIN_TO_TOP_KEY = "slowargo.stringHistory.pinToTop";
 // View History 的「截断长条目」视图开关，同样只影响显示
 const CLAMP_TEXT_KEY = "slowargo.stringHistory.clampText";
 
+// RefreshTriggerV1 shortcuts: one window listener for all nodes, so clones that never join a graph can't leak
+const SHORTCUT_MODS = ["ctrl", "alt", "shift", "meta"];
+let capturingNode = null;
+const shortcutKeyOf = (e) => /^(Key|Digit)./.test(e.code) ? e.code.slice(-1).toLowerCase()
+    : e.key === " " ? "space" : (e.key ?? "").toLowerCase();
+const parseShortcut = (node) => {
+    const parts = String(node.properties?.shortcut ?? "").toLowerCase().split("+").map(p => p.trim()).filter(Boolean);
+    return parts.length ? { key: parts.pop(), mods: parts } : null;
+};
+const setCapturingNode = (node) => {
+    const prev = capturingNode;
+    capturingNode = node;
+    prev?.updateShortcutLabel?.();
+    node?.updateShortcutLabel?.();
+};
+window.addEventListener("keydown", (e) => {
+    const t = e.composedPath?.()[0] ?? e.target;
+    const editable = t?.isContentEditable || t?.tagName === "INPUT" || t?.tagName === "TEXTAREA";
+    if (capturingNode) {
+        if (editable || e.isComposing || e.key === "Process") return setCapturingNode(null);
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+        const node = capturingNode;
+        setCapturingNode(null);
+        if (e.key === "Backspace" || e.key === "Delete") node.setProperty("shortcut", "");
+        else if (e.key !== "Escape") {
+            node.setProperty("shortcut", [...SHORTCUT_MODS.filter(m => e[m + "Key"]), shortcutKeyOf(e)].join("+"));
+        }
+        return;
+    }
+    if (e.repeat || editable) return;
+    const matched = (app.canvas?.graph?.nodes ?? []).filter(n => {
+        const sc = n.refreshFromTrigger && n.mode !== 2 && n.mode !== 4 && parseShortcut(n);
+        return sc && shortcutKeyOf(e) === sc.key && (e.shiftKey || !sc.mods.includes("shift"))
+            && ["ctrl", "alt", "meta"].every(m => e[m + "Key"] === sc.mods.includes(m));
+    });
+    if (!matched.length) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    for (const n of matched) n.refreshFromTrigger(e.shiftKey);
+}, true);
+// The menu item that starts capture fires on click, i.e. after its own pointerdown
+window.addEventListener("pointerdown", () => capturingNode && setCapturingNode(null), true);
+window.addEventListener("blur", () => capturingNode && setCapturingNode(null));
+
 app.registerExtension({
     name: "slowargo.js.extension",
     async setup() {
@@ -853,6 +899,21 @@ app.registerExtension({
                         origCallback?.call(this);
                     };
                 }
+
+                // Shift+drop an image onto the node: upload it, then open the mask editor
+                const origOnDragDrop = this.onDragDrop;
+                if (origOnDragDrop) {
+                    this.onDragDrop = async function(e) {
+                        const shift = e?.shiftKey;
+                        const handled = await origOnDragDrop.apply(this, arguments);
+                        if (handled && shift) {
+                            ComfyApp.clipspace_return_node = node;
+                            ComfyApp.open_maskeditor?.();
+                            ComfyApp.clipspace_return_node = null;
+                        }
+                        return handled;
+                    };
+                }
                 // const refreshWidget = this.widgets?.find(w => w.name === "refresh");
                 // if (refreshWidget) {
                 //     refreshWidget.hidden = true;
@@ -933,7 +994,7 @@ app.registerExtension({
                 const node = this;
                 const result = origOnNodeCreated?.apply(this, arguments);
 
-                const refreshFn = async function() {
+                const refreshFn = async function(forceOpenEditor) {
                     try {
                         // Find connected LoadRecentImagePlusV1 node via trigger input
                         const triggerInput = node.inputs?.find(i => i.name === "trigger");
@@ -942,10 +1003,10 @@ app.registerExtension({
                             return;
                         }
 
-                        const link = app.graph.links[triggerInput.link];
+                        const link = node.graph?.getLink(triggerInput.link);
                         if (!link) return;
 
-                        const targetNode = app.graph.getNodeById(link.origin_id);
+                        const targetNode = node.graph.getNodeById(link.origin_id);
                         if (!targetNode || targetNode.comfyClass !== "LoadRecentImagePlusV1") {
                             console.warn("[RefreshTriggerV1] Connected node is not LoadRecentImagePlusV1, got:", targetNode?.comfyClass);
                             return;
@@ -953,14 +1014,14 @@ app.registerExtension({
 
                         // Use this node's watch_folders value and call target's refreshFn
                         const watchFolders = node.widgets.find(w => w.name === "watch_folders")?.value ?? "";
-                        await targetNode.refreshImageList?.(watchFolders);
+                        await targetNode.refreshImageList?.(watchFolders, forceOpenEditor);
 
                     } catch (e) {
                         console.error("[RefreshTriggerV1] Error refreshing:", e);
                     }
                 };
 
-                const refreshBtn = this.addWidget("button", "refresh", "", refreshFn);
+                const refreshBtn = this.addWidget("button", "refresh", "", () => refreshFn());
 
                 // Arrange widgets - move refresh button below watch_folders widget
                 if (refreshBtn) {
@@ -977,81 +1038,36 @@ app.registerExtension({
 
                 this.constructor.exposedActions = ["Refresh"];
 
-                const MODIFIERS = ["ctrl", "alt", "shift", "meta"];
-                let capturing = false;
-                this.addProperty("shortcut", "", "string");
-
-                const keyOf = (e) => /^(Key|Digit)./.test(e.code) ? e.code.slice(-1).toLowerCase()
-                    : e.key === " " ? "space" : (e.key ?? "").toLowerCase();
-                const parseShortcut = () => {
-                    const parts = String(node.properties.shortcut ?? "").toLowerCase().split("+")
-                        .map(p => p.trim()).filter(Boolean);
-                    return parts.length ? { key: parts.pop(), mods: parts } : null;
-                };
-                const updateLabel = () => {
-                    const sc = parseShortcut();
-                    const shown = sc && [...MODIFIERS.filter(m => sc.mods.includes(m)), sc.key]
+                // The module-level keydown listener finds nodes through these two
+                this.refreshFromTrigger = refreshFn;
+                this.updateShortcutLabel = () => {
+                    const sc = parseShortcut(node);
+                    const shown = sc && [...SHORTCUT_MODS.filter(m => sc.mods.includes(m)), sc.key]
                         .map(p => p[0].toUpperCase() + p.slice(1)).join("+");
-                    refreshBtn.label = capturing ? "Press keys… (Esc cancel, Backspace clear)"
-                        : shown ? `refresh (${shown})` : "";
+                    // undefined rather than "": Vue nodes render `label ?? name`
+                    refreshBtn.label = capturingNode === node ? "Press keys… (Esc cancel, Backspace clear)"
+                        : shown ? `refresh (${shown})` : undefined;
                     app.graph?.setDirtyCanvas(true, true);
                 };
+                this.addProperty("shortcut", "", "string");
 
-                const onKeyDown = (e) => {
-                    if (capturing) {
-                        e.preventDefault();
-                        e.stopImmediatePropagation();
-                        if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
-                        capturing = false;
-                        if (e.key === "Backspace" || e.key === "Delete") node.setProperty("shortcut", "");
-                        else if (e.key !== "Escape") {
-                            node.setProperty("shortcut", [...MODIFIERS.filter(m => e[m + "Key"]), keyOf(e)].join("+"));
-                        }
-                        updateLabel();
-                        return;
-                    }
-                    const sc = parseShortcut();
-                    const t = e.target;
-                    if (!sc || e.repeat || node.mode === 2 || node.mode === 4) return;
-                    if (t?.isContentEditable || t?.tagName === "INPUT" || t?.tagName === "TEXTAREA") return;
-                    if (keyOf(e) !== sc.key || (sc.mods.includes("shift") && !e.shiftKey)) return;
-                    if (["ctrl", "alt", "meta"].some(m => e[m + "Key"] !== sc.mods.includes(m))) return;
-                    e.preventDefault();
-                    e.stopImmediatePropagation();
-                    refreshFn();
-                };
-                window.addEventListener("keydown", onKeyDown, true);
-
-                const origOnRemoved = this.onRemoved;
-                this.onRemoved = function() {
-                    window.removeEventListener("keydown", onKeyDown, true);
-                    return origOnRemoved?.apply(this, arguments);
-                };
-                // Copy/paste and alt-drag go through clone(); a duplicated shortcut would only ever fire one node
-                const origClone = this.clone;
-                this.clone = function() {
-                    const cloned = origClone.apply(this, arguments);
-                    cloned?.setProperty("shortcut", "");
-                    return cloned;
-                };
                 const origOnPropertyChanged = this.onPropertyChanged;
                 this.onPropertyChanged = function(name) {
                     const changed = origOnPropertyChanged?.apply(this, arguments);
-                    if (name === "shortcut") updateLabel();
+                    if (name === "shortcut") node.updateShortcutLabel();
                     return changed;
                 };
                 const origOnConfigure = this.onConfigure;
                 this.onConfigure = function() {
                     const configured = origOnConfigure?.apply(this, arguments);
-                    updateLabel();
+                    node.updateShortcutLabel();
                     return configured;
                 };
                 const origGetExtraMenuOptions = this.getExtraMenuOptions;
                 this.getExtraMenuOptions = (canvas, options) => {
                     const extraOptions = origGetExtraMenuOptions?.call(this, canvas, options);
-                    const startCapture = () => { capturing = true; updateLabel(); };
-                    const entries = [{ content: "Set Shortcut…", callback: startCapture }];
-                    if (parseShortcut()) {
+                    const entries = [{ content: "Set Shortcut…", callback: () => setCapturingNode(node) }];
+                    if (parseShortcut(node)) {
                         entries.push({ content: "Clear Shortcut", callback: () => node.setProperty("shortcut", "") });
                     }
                     return Array.isArray(extraOptions) ? [...extraOptions, ...entries] : entries;
