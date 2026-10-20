@@ -412,21 +412,34 @@ class ServerFileTransfer:
         )
 
 
-# LocateFileByName 的记忆：上次定位到的文件和当时参照图的指纹。同一张参照图再次定位时直接用它，
-# 即使那个文件已被上一轮覆盖、内容不再像参照图
+# LocateFileByName 的记忆：上次定位到的目录，以及每张参照图（按像素指纹）定位到的文件。
+# 同一张参照图再次定位时直接用记下的文件，即使它已被上一轮覆盖、内容不再像参照图
 LOCATE_STATE_FILE = Path(folder_paths.get_user_directory()) / "slowargo_locate_file.json"
+LOCATE_MEMO_LIMIT = 50
 
 
 def load_locate_state():
+    """返回 (last_dir, {参照图指纹: 文件路径})。"""
     try:
         state = json.loads(LOCATE_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
-    return {k: v for k, v in state.items() if isinstance(v, str)} if isinstance(state, dict) else {}
+        return "", {}
+    if not isinstance(state, dict):
+        return "", {}
+    last_dir = state.get("last_dir")
+    files = state.get("files")
+    files = {k: v for k, v in files.items() if isinstance(v, str)} if isinstance(files, dict) else {}
+    return (last_dir if isinstance(last_dir, str) else ""), files
 
 
 def save_locate_state(path, reference_digest):
-    state = {"last_dir": str(path.parent), "path": str(path), "reference_digest": reference_digest}
+    _, files = load_locate_state()
+    if reference_digest:
+        # 最新的放最后，超出上限丢最旧的
+        files.pop(reference_digest, None)
+        files[reference_digest] = str(path)
+        files = dict(list(files.items())[-LOCATE_MEMO_LIMIT:])
+    state = {"last_dir": str(path.parent), "files": files}
     try:
         LOCATE_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     except OSError as e:
@@ -463,13 +476,14 @@ def locate_file_by_name(filename, search_roots, reference=None, reference_digest
     def accepted(path):
         return reference is None or matches_reference(path, reference)
 
-    state = load_locate_state()
-    remembered = Path(state.get("path", ""))
-    same_name = os.path.normcase(remembered.name) == os.path.normcase(filename)
-    if reference_digest and state.get("reference_digest") == reference_digest and same_name and remembered.is_file():
-        return remembered
+    last_dir, files = load_locate_state()
+    remembered = files.get(reference_digest) if reference_digest else None
+    if remembered:
+        remembered = Path(remembered)
+        if os.path.normcase(remembered.name) == os.path.normcase(filename) and remembered.is_file():
+            logger.info(f"[LocateFileByName] reusing {remembered}, located earlier for the same reference")
+            return remembered
 
-    last_dir = state.get("last_dir", "")
     if last_dir:
         candidate = Path(last_dir) / filename
         if candidate.is_file() and accepted(candidate):
@@ -549,7 +563,7 @@ class LocateFileByName:
         digest = ""
         if reference is not None:
             reference = (reference[0, :, :, :3].cpu().numpy() * 255).round().astype(np.int16)
-            digest = hashlib.blake2b(reference.tobytes(), digest_size=16).hexdigest()
+            digest = hashlib.blake2b(str(reference.shape).encode() + reference.tobytes(), digest_size=16).hexdigest()
         path = locate_file_by_name(filename, search_roots, reference, digest)
         save_locate_state(path, digest)
         return (str(path.parent), str(path))
