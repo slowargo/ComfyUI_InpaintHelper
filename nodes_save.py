@@ -3,6 +3,7 @@
 路由是 import 时注册的副作用，__init__.py 里对本模块的导入不能删。
 """
 
+import hashlib
 import logging
 import json
 import os
@@ -411,25 +412,25 @@ class ServerFileTransfer:
         )
 
 
-# LocateFileByName 上次定位到的目录，下次先在这里找
-LAST_LOCATED_DIR_FILE = Path(folder_paths.get_user_directory()) / "slowargo_locate_file.json"
+# LocateFileByName 的记忆：上次定位到的文件和当时参照图的指纹。同一张参照图再次定位时直接用它，
+# 即使那个文件已被上一轮覆盖、内容不再像参照图
+LOCATE_STATE_FILE = Path(folder_paths.get_user_directory()) / "slowargo_locate_file.json"
 
 
-def load_last_located_dir():
+def load_locate_state():
     try:
-        state = json.loads(LAST_LOCATED_DIR_FILE.read_text(encoding="utf-8"))
+        state = json.loads(LOCATE_STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ""
-    last_dir = state.get("last_dir") if isinstance(state, dict) else None
-    return last_dir if isinstance(last_dir, str) else ""
+        return {}
+    return {k: v for k, v in state.items() if isinstance(v, str)} if isinstance(state, dict) else {}
 
 
-def save_last_located_dir(directory):
+def save_locate_state(path, reference_digest):
+    state = {"last_dir": str(path.parent), "path": str(path), "reference_digest": reference_digest}
     try:
-        LAST_LOCATED_DIR_FILE.write_text(
-            json.dumps({"last_dir": str(directory)}, ensure_ascii=False), encoding="utf-8")
+        LOCATE_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     except OSError as e:
-        logger.warning(f"[LocateFileByName] failed to save last dir: {e}")
+        logger.warning(f"[LocateFileByName] failed to save state: {e}")
 
 
 # 至少这么多比例的像素各通道差值都不超过容差，才算同一张图。inpaint 只改局部、
@@ -454,15 +455,21 @@ def matches_reference(path, reference):
     return close.mean() >= SAME_IMAGE_MIN_FRACTION
 
 
-def locate_file_by_name(filename, search_roots, reference=None):
-    """先查上次定位到的目录，再递归搜索 search_roots（";" 分隔），要求恰好一个同名文件。
+def locate_file_by_name(filename, search_roots, reference=None, reference_digest=""):
+    """依次：同一参照图上次定位到的文件、上次目录、递归搜索 search_roots（";" 分隔），要求恰好一个同名文件。
 
     reference 给了就只认内容与它一致的图片；ComfyUI 自己的 input/output/temp 目录不搜，那里只有上传的副本。
     """
     def accepted(path):
         return reference is None or matches_reference(path, reference)
 
-    last_dir = load_last_located_dir()
+    state = load_locate_state()
+    remembered = Path(state.get("path", ""))
+    same_name = os.path.normcase(remembered.name) == os.path.normcase(filename)
+    if reference_digest and state.get("reference_digest") == reference_digest and same_name and remembered.is_file():
+        return remembered
+
+    last_dir = state.get("last_dir", "")
     if last_dir:
         candidate = Path(last_dir) / filename
         if candidate.is_file() and accepted(candidate):
@@ -523,8 +530,9 @@ class LocateFileByName:
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("directory", "file_path")
     DESCRIPTION = (
-        "Find the single file with this name: the last located folder first, then search_roots. "
-        "Fails when nothing or more than one file matches."
+        "Find the single file with this name: the file last located for the same reference, then "
+        "the last located folder, then search_roots. Fails when nothing or more than one file "
+        "matches."
     )
     FUNCTION = "execute"
     CATEGORY = "Slowargo"
@@ -538,10 +546,12 @@ class LocateFileByName:
         filename = os.path.basename(str(filename or "").strip())
         if not filename:
             raise ValueError("filename is required")
+        digest = ""
         if reference is not None:
             reference = (reference[0, :, :, :3].cpu().numpy() * 255).round().astype(np.int16)
-        path = locate_file_by_name(filename, search_roots, reference)
-        save_last_located_dir(path.parent)
+            digest = hashlib.blake2b(reference.tobytes(), digest_size=16).hexdigest()
+        path = locate_file_by_name(filename, search_roots, reference, digest)
+        save_locate_state(path, digest)
         return (str(path.parent), str(path))
 
 
